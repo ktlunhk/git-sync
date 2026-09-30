@@ -95,3 +95,14 @@ GitHub endpoint construction is centralized in `GitServerConfig.java`. To adapt 
 ## v1.40
 - Removed the Clear button from the OAuth Settings dialog.
 - OAuth Save and Cancel behavior remains unchanged.
+
+## v1.41
+- All AlertDialog popup windows can now be dragged by their title area.
+- Dragging is limited to the title gesture so form fields, scrolling content, and buttons retain normal touch behavior.
+- Mirror confirmation dialogs now use the same popup styling/drag behavior as other dialogs.
+
+
+## v1.42
+- Fixed STOP cancellation state persisting into later Sync Preview/Sync operations.
+- STOP now uses operation generations: it cancels operations already running when STOP is pressed, while new operations can start normally afterward.
+- Preserves safe behavior for concurrent Sync All operations.
