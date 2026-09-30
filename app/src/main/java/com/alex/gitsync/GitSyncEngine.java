@@ -25,11 +25,21 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.ArrayList;
 import java.security.MessageDigest;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class GitSyncEngine {
-    private static volatile boolean cancelRequested = false;
-    public static void cancel() { cancelRequested = true; }
-    private static void checkCancelled() throws Exception { if (cancelRequested) throw new Exception("Sync stopped by user"); }
+    // Cancellation uses generations rather than a persistent boolean.
+    // STOP invalidates operations that are already running, while operations
+    // started afterwards automatically belong to the new generation.
+    private static final AtomicInteger cancelGeneration = new AtomicInteger(0);
+    private static final ThreadLocal<Integer> operationGeneration = new ThreadLocal<Integer>();
+    public static void cancel() { cancelGeneration.incrementAndGet(); }
+    private static void beginOperation() { operationGeneration.set(Integer.valueOf(cancelGeneration.get())); }
+    private static void endOperation() { operationGeneration.remove(); }
+    private static void checkCancelled() throws Exception {
+        Integer started = operationGeneration.get();
+        if (started != null && started.intValue() != cancelGeneration.get()) throw new Exception("Sync stopped by user");
+    }
     public interface Callback { void progress(String message); void done(String message); }
     public interface CreationCallback extends Callback { boolean confirmCreateRepository(String owner, String repository); }
     public interface PreviewCallback { void ready(SyncPreview preview); void error(String message); }
@@ -49,17 +59,17 @@ public class GitSyncEngine {
     public static void mirrorRemoteToLocal(final Context c, final RepoProfile p, final Callback cb) { runTask(c, p, cb, 4); }
 
     public static void previewSync(final Context c, final RepoProfile p, final PreviewCallback pcb) {
-        new Thread(new Runnable() { public void run() { try {
+        new Thread(new Runnable() { public void run() { beginOperation(); try {
             RepoId id = parseRepo(p.url); if (id == null) throw new Exception("Invalid " + GitServerConfig.SERVER_NAME + " repository URL");
             if (p.localPath == null || !p.localPath.startsWith("content://")) throw new Exception("Select the local folder again.");
             Uri root = treeDocumentUri(Uri.parse(p.localPath));
             pcb.ready(buildPreview(c, p, id, root));
-        } catch (Exception e) { pcb.error(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()); } } }).start();
+        } catch (Exception e) { pcb.error(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()); } finally { endOperation(); } } }).start();
     }
 
     private static void runTask(final Context c, final RepoProfile p, final Callback cb, final int mode) {
-        new Thread(new Runnable() { public void run() { try {
-            cancelRequested = false; callbackHolder.set(cb); cb.progress("Starting " + p.name + "...");
+        new Thread(new Runnable() { public void run() { beginOperation(); try {
+            callbackHolder.set(cb); cb.progress("Starting " + p.name + "...");
             RepoId id = parseRepo(p.url); if (id == null) throw new Exception("Use a " + GitServerConfig.SERVER_NAME + " repository URL such as " + GitServerConfig.repositoryExampleUrl());
             ensureRepositoryExists(p, id);
             if (p.localPath == null || !p.localPath.startsWith("content://")) throw new Exception("Select the local folder again using Select local folder so Android can grant access.");
@@ -70,7 +80,7 @@ public class GitSyncEngine {
             if (mode == 3) { cb.progress("Mirror mode: local folder is the source of truth"); int[] result = mirrorFolder(c, p, id, root); up = result[0]; down = result[1]; }
             if (mode == 4) { cb.progress("Mirror mode: " + GitServerConfig.SERVER_NAME + " is the source of truth"); int[] result = mirrorRemoteFolder(c, p, id, root); down = result[0]; up = result[1]; }
             if (mode == 0) cb.done("Downloaded " + down + " file(s) from " + p.name); else if (mode == 1) cb.done("Uploaded " + up + " file(s) to " + p.name); else if (mode == 3) cb.done("Mirror complete: uploaded/updated " + up + ", deleted from " + GitServerConfig.SERVER_NAME + " " + down + " file(s)"); else if (mode == 4) cb.done("Mirror complete: downloaded/updated " + down + ", deleted locally " + up + " file(s)"); else cb.done("Sync complete: downloaded " + down + ", uploaded " + up + " file(s)");
-        } catch (Exception e) { String m = e.getMessage(); if (m == null || m.length() == 0) m = e.getClass().getSimpleName(); cb.done("ERROR " + p.name + ": " + m); } } }).start();
+        } catch (Exception e) { String m = e.getMessage(); if (m == null || m.length() == 0) m = e.getClass().getSimpleName(); cb.done("ERROR " + p.name + ": " + m); } finally { callbackHolder.remove(); endOperation(); } } }).start();
     }
 
 
