@@ -20,6 +20,10 @@ import android.graphics.Paint;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.view.MotionEvent;
+import android.view.Window;
+import android.view.WindowManager;
+import android.view.Gravity;
 import android.content.DialogInterface;
 import android.widget.*;
 import java.io.File;
@@ -272,11 +276,11 @@ public class MainActivity extends Activity {
     }
 
     private void confirmMirror(final RepoProfile r) {
-        new AlertDialog.Builder(this).setTitle("Mirror local to " + GitServerConfig.SERVER_NAME).setMessage(GitServerConfig.SERVER_NAME + " will be made the same as the selected local folder. Files that exist only on " + GitServerConfig.SERVER_NAME + " will be DELETED. Continue?").setPositiveButton("Mirror", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { mirrorOne(r); } }).setNegativeButton("Cancel", null).show();
+        final AlertDialog d = new AlertDialog.Builder(this).setTitle("Mirror local to " + GitServerConfig.SERVER_NAME).setMessage(GitServerConfig.SERVER_NAME + " will be made the same as the selected local folder. Files that exist only on " + GitServerConfig.SERVER_NAME + " will be DELETED. Continue?").setPositiveButton("Mirror", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { mirrorOne(r); } }).setNegativeButton("Cancel", null).create(); d.setOnShowListener(new DialogInterface.OnShowListener(){ public void onShow(DialogInterface x){ polishDialog(d); }}); d.show();
     }
 
     private void confirmRemoteMirror(final RepoProfile r) {
-        new AlertDialog.Builder(this).setTitle("Mirror " + GitServerConfig.SERVER_NAME + " to local").setMessage("The selected local folder will be made the same as " + GitServerConfig.SERVER_NAME + ". Local files that do not exist on " + GitServerConfig.SERVER_NAME + " will be DELETED. Continue?").setPositiveButton("Mirror", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { mirrorRemoteOne(r); } }).setNegativeButton("Cancel", null).show();
+        final AlertDialog d = new AlertDialog.Builder(this).setTitle("Mirror " + GitServerConfig.SERVER_NAME + " to local").setMessage("The selected local folder will be made the same as " + GitServerConfig.SERVER_NAME + ". Local files that do not exist on " + GitServerConfig.SERVER_NAME + " will be DELETED. Continue?").setPositiveButton("Mirror", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { mirrorRemoteOne(r); } }).setNegativeButton("Cancel", null).create(); d.setOnShowListener(new DialogInterface.OnShowListener(){ public void onShow(DialogInterface x){ polishDialog(d); }}); d.show();
     }
 
     private void mirrorRemoteOne(final RepoProfile r) {
@@ -292,7 +296,36 @@ public class MainActivity extends Activity {
     }
 
     private int dp(int v) { return (int)(v * getResources().getDisplayMetrics().density + 0.5f); }
-    private void polishDialog(AlertDialog d) { if(d.getWindow()!=null) d.getWindow().setBackgroundDrawableResource(R.drawable.bg_dialog); Button p=d.getButton(AlertDialog.BUTTON_POSITIVE), n=d.getButton(AlertDialog.BUTTON_NEGATIVE), z=d.getButton(AlertDialog.BUTTON_NEUTRAL); if(p!=null)p.setTextColor(0xFF1976D2); if(n!=null)n.setTextColor(0xFF546E7A); if(z!=null)z.setTextColor(0xFF546E7A); }
+    private void polishDialog(AlertDialog d) { if(d.getWindow()!=null) d.getWindow().setBackgroundDrawableResource(R.drawable.bg_dialog); Button p=d.getButton(AlertDialog.BUTTON_POSITIVE), n=d.getButton(AlertDialog.BUTTON_NEGATIVE), z=d.getButton(AlertDialog.BUTTON_NEUTRAL); if(p!=null)p.setTextColor(0xFF1976D2); if(n!=null)n.setTextColor(0xFF546E7A); if(z!=null)z.setTextColor(0xFF546E7A); makeDialogDraggable(d); }
+
+    // Drag a popup by its title. Keeping the gesture on the title avoids stealing
+    // touches from fields, scrolling content, and action buttons.
+    private void makeDialogDraggable(final AlertDialog dialog) {
+        final Window window = dialog.getWindow();
+        if (window == null) return;
+        final View title = dialog.findViewById(getResources().getIdentifier("alertTitle", "id", "android"));
+        if (title == null) return;
+        title.setOnTouchListener(new View.OnTouchListener() {
+            private float downRawX, downRawY;
+            private int startX, startY;
+            public boolean onTouch(View v, MotionEvent event) {
+                WindowManager.LayoutParams lp = window.getAttributes();
+                if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                    downRawX = event.getRawX(); downRawY = event.getRawY();
+                    startX = lp.x; startY = lp.y;
+                    return true;
+                }
+                if (event.getAction() == MotionEvent.ACTION_MOVE) {
+                    lp.gravity = Gravity.CENTER;
+                    lp.x = startX + Math.round(event.getRawX() - downRawX);
+                    lp.y = startY + Math.round(event.getRawY() - downRawY);
+                    window.setAttributes(lp);
+                    return true;
+                }
+                return event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL;
+            }
+        });
+    }
 
     private TextView dialogLabel(String text) { TextView v = new TextView(this); v.setText(text); v.setTextColor(0xFF455A64); v.setTextSize(13); v.setPadding(2, 10, 2, 4); return v; }
     private void styleDialogField(EditText e) { e.setBackgroundResource(R.drawable.bg_input); e.setPadding(12, 8, 12, 8); }
