@@ -2,6 +2,7 @@ package com.alex.gitsync;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.ArrayList;
@@ -18,9 +19,9 @@ public class RepoStore {
             int i;
             for (i = 0; i < a.length(); i++) {
                 JSONObject o = a.getJSONObject(i);
-                out.add(new RepoProfile(o.optString("name"), o.optString("url"), o.optString("branch", "main"), o.optString("localPath"), o.optString("username"), o.optString("token")));
+                out.add(new RepoProfile(o.optString("name"), o.optString("url"), o.optString("branch", "main"), o.optString("localPath"), o.optString("username"), ""));
             }
-        } catch (Exception e) { }
+        } catch (Exception e) { Log.e("myGitSync", "Unable to load repository profiles", e); }
         return out;
     }
 
@@ -31,10 +32,10 @@ public class RepoStore {
             for (i = 0; i < list.size(); i++) {
                 RepoProfile r = list.get(i);
                 JSONObject o = new JSONObject();
-                o.put("name", r.name); o.put("url", r.url); o.put("branch", r.branch); o.put("localPath", r.localPath); o.put("username", r.username); o.put("token", r.token);
+                o.put("name", r.name); o.put("url", r.url); o.put("branch", r.branch); o.put("localPath", r.localPath); o.put("username", r.username);
                 a.put(o);
             }
-        } catch (Exception e) { }
+        } catch (Exception e) { Log.e("myGitSync", "Unable to serialize repository profiles", e); }
         SharedPreferences.Editor ed = c.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit();
         ed.putString(KEY, a.toString()); ed.apply();
     }
