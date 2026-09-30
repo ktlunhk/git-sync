@@ -27,7 +27,7 @@ public class GitHubAuth {
     public static void clearOAuthSettings(Context c) { c.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit().remove("client_id").remove("client_secret").remove("redirect_uri").remove("token").remove("oauth_state").remove("pkce_verifier").apply(); }
 
     public static String createAuthorizationUrl(Context c) throws Exception {
-        if (!isConfigured(c)) throw new Exception("GitHub OAuth Client ID and Client Secret are not configured. Open Settings.");
+        if (!isConfigured(c)) throw new Exception(GitServerConfig.SERVER_NAME + " OAuth Client ID and Client Secret are not configured. Open Settings.");
         String clientId = clientId(c); String redirect = redirectUri(c);
         String state = randomUrlSafe(32); String verifier = randomUrlSafe(64); String challenge = sha256UrlSafe(verifier);
         c.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit().putString("oauth_state", state).putString("pkce_verifier", verifier).apply();
@@ -40,8 +40,8 @@ public class GitHubAuth {
             if (expected.length() == 0 || returnedState == null || !expected.equals(returnedState)) throw new Exception("OAuth state validation failed. Please sign in again.");
             String id = clientId(c); String secret = clientSecret(c); String redirect = redirectUri(c); String body = "client_id=" + enc(id) + "&client_secret=" + enc(secret) + "&code=" + enc(code) + "&redirect_uri=" + enc(redirect) + "&code_verifier=" + enc(verifier);
             JSONObject result = post(GitServerConfig.oauthAccessTokenUrl(), body); String token = result.optString("access_token", "");
-            if (token.length() == 0) throw new Exception(errorMessage(result, "GitHub did not return an access token."));
-            p.edit().putString("token", token).remove("oauth_state").remove("pkce_verifier").apply(); cb.done(true, "Signed in to GitHub");
+            if (token.length() == 0) throw new Exception(errorMessage(result, GitServerConfig.SERVER_NAME + " did not return an access token."));
+            p.edit().putString("token", token).remove("oauth_state").remove("pkce_verifier").apply(); cb.done(true, "Signed in to " + GitServerConfig.SERVER_NAME);
         } catch (Exception e) { cb.done(false, e.getMessage() == null ? e.toString() : e.getMessage()); } }}).start();
     }
 
@@ -49,7 +49,7 @@ public class GitHubAuth {
     public static boolean signedIn(Context c) { return token(c).length() > 0; }
     public static void signOut(Context c) { c.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit().remove("token").remove("oauth_state").remove("pkce_verifier").apply(); }
 
-    private static JSONObject post(String address, String body) throws Exception { HttpURLConnection h = (HttpURLConnection)new URL(address).openConnection(); h.setRequestMethod("POST"); h.setDoOutput(true); h.setConnectTimeout(20000); h.setReadTimeout(30000); h.setRequestProperty("Accept", "application/json"); h.setRequestProperty("User-Agent", "AIDE-GitSync-Android"); h.setRequestProperty("Content-Type", "application/x-www-form-urlencoded"); OutputStream os = h.getOutputStream(); os.write(body.getBytes("UTF-8")); os.close(); int rc = h.getResponseCode(); InputStream in = rc >= 200 && rc < 300 ? h.getInputStream() : h.getErrorStream(); String text = read(in); h.disconnect(); if (text.length() == 0) throw new Exception("GitHub returned HTTP " + rc + " with an empty response."); JSONObject json = new JSONObject(text); if (rc < 200 || rc >= 300) throw new Exception("GitHub OAuth failed (HTTP " + rc + "): " + errorMessage(json, text)); return json; }
+    private static JSONObject post(String address, String body) throws Exception { HttpURLConnection h = (HttpURLConnection)new URL(address).openConnection(); h.setRequestMethod("POST"); h.setDoOutput(true); h.setConnectTimeout(20000); h.setReadTimeout(30000); h.setRequestProperty("Accept", "application/json"); h.setRequestProperty("User-Agent", "AIDE-GitSync-Android"); h.setRequestProperty("Content-Type", "application/x-www-form-urlencoded"); OutputStream os = h.getOutputStream(); os.write(body.getBytes("UTF-8")); os.close(); int rc = h.getResponseCode(); InputStream in = rc >= 200 && rc < 300 ? h.getInputStream() : h.getErrorStream(); String text = read(in); h.disconnect(); if (text.length() == 0) throw new Exception(GitServerConfig.SERVER_NAME + " returned HTTP " + rc + " with an empty response."); JSONObject json = new JSONObject(text); if (rc < 200 || rc >= 300) throw new Exception(GitServerConfig.SERVER_NAME + " OAuth failed (HTTP " + rc + "): " + errorMessage(json, text)); return json; }
     private static String errorMessage(JSONObject o, String fallback) { String d = o.optString("error_description", ""); if (d.length() > 0) return d; String e = o.optString("error", ""); return e.length() > 0 ? e : fallback; }
     private static String randomUrlSafe(int bytes) { byte[] b = new byte[bytes]; new SecureRandom().nextBytes(b); return Base64.encodeToString(b, Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING); }
     private static String sha256UrlSafe(String s) throws Exception { MessageDigest md = MessageDigest.getInstance("SHA-256"); return Base64.encodeToString(md.digest(s.getBytes("UTF-8")), Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING); }
