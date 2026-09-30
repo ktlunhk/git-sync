@@ -64,12 +64,12 @@ public class GitSyncEngine {
             ensureRepositoryExists(p, id);
             if (p.localPath == null || !p.localPath.startsWith("content://")) throw new Exception("Select the local folder again using Select local folder so Android can grant access.");
             Uri tree = Uri.parse(p.localPath); Uri root = treeDocumentUri(tree); int down = 0; int up = 0; cb.progress("Local folder access OK");
-            if (mode == 0) { cb.progress("Reading GitHub repository..."); down = downloadRepository(c, p, id, root); }
+            if (mode == 0) { cb.progress("Reading " + GitServerConfig.SERVER_NAME + " repository..."); down = downloadRepository(c, p, id, root); }
             if (mode == 1) { cb.progress("Scanning local folder and uploading..."); up = uploadFolder(c, p, id, root, root, ""); }
             if (mode == 2) { cb.progress("Applying protected two-way sync..."); int[] sr = safeTwoWaySync(c, p, id, root); down = sr[0]; up = sr[1]; }
             if (mode == 3) { cb.progress("Mirror mode: local folder is the source of truth"); int[] result = mirrorFolder(c, p, id, root); up = result[0]; down = result[1]; }
-            if (mode == 4) { cb.progress("Mirror mode: GitHub is the source of truth"); int[] result = mirrorRemoteFolder(c, p, id, root); down = result[0]; up = result[1]; }
-            if (mode == 0) cb.done("Downloaded " + down + " file(s) from " + p.name); else if (mode == 1) cb.done("Uploaded " + up + " file(s) to " + p.name); else if (mode == 3) cb.done("Mirror complete: uploaded/updated " + up + ", deleted from GitHub " + down + " file(s)"); else if (mode == 4) cb.done("Mirror complete: downloaded/updated " + down + ", deleted locally " + up + " file(s)"); else cb.done("Sync complete: downloaded " + down + ", uploaded " + up + " file(s)");
+            if (mode == 4) { cb.progress("Mirror mode: " + GitServerConfig.SERVER_NAME + " is the source of truth"); int[] result = mirrorRemoteFolder(c, p, id, root); down = result[0]; up = result[1]; }
+            if (mode == 0) cb.done("Downloaded " + down + " file(s) from " + p.name); else if (mode == 1) cb.done("Uploaded " + up + " file(s) to " + p.name); else if (mode == 3) cb.done("Mirror complete: uploaded/updated " + up + ", deleted from " + GitServerConfig.SERVER_NAME + " " + down + " file(s)"); else if (mode == 4) cb.done("Mirror complete: downloaded/updated " + down + ", deleted locally " + up + " file(s)"); else cb.done("Sync complete: downloaded " + down + ", uploaded " + up + " file(s)");
         } catch (Exception e) { String m = e.getMessage(); if (m == null || m.length() == 0) m = e.getClass().getSimpleName(); cb.done("ERROR " + p.name + ": " + m); } } }).start();
     }
 
@@ -137,12 +137,62 @@ public class GitSyncEngine {
 
     private static String gitBlobSha(Context c, Uri file) throws Exception { long size=getFileSize(c,file); MessageDigest md=MessageDigest.getInstance("SHA-1"); md.update(("blob "+size+"\0").getBytes("UTF-8")); InputStream in=c.getContentResolver().openInputStream(file); byte[] b=new byte[32768]; int n; while((n=in.read(b))>0)md.update(b,0,n); in.close(); byte[] d=md.digest(); StringBuilder x=new StringBuilder(); for(byte q:d)x.append(String.format("%02x",q&255)); return x.toString(); }
 
-    private static void downloadPath(Context c, RepoProfile p, RepoId id, Uri root, String path, String sha) throws Exception { if(callbackHolder.get()!=null)callbackHolder.get().progress("Downloading: "+path); JSONObject blob=new JSONObject(request("GET",GitServerConfig.blobUrl(id.owner,id.repo,sha),p.token,null,null)); byte[] data=Base64.decode(blob.optString("content").replace("\n","").replace("\r",""),Base64.DEFAULT); Uri out=ensureFile(c,root,path); OutputStream os=c.getContentResolver().openOutputStream(out,"wt"); if(os==null)throw new Exception("Cannot write "+path); os.write(data); os.close(); }
+    private static void downloadPath(Context c, RepoProfile p, RepoId id, Uri root, String path, String sha) throws Exception {
+        if (callbackHolder.get() != null) callbackHolder.get().progress("Downloading: " + path);
+        JSONObject blob = new JSONObject(request("GET", GitServerConfig.blobUrl(id.owner, id.repo, sha), p.token, null, null));
+        byte[] data = Base64.decode(blob.optString("content").replace("\n", "").replace("\r", ""), Base64.DEFAULT);
+        Uri out = ensureFile(c, root, path);
+        if (!downloadLfsPointerIfNeeded(c, p, id, path, data, out)) writeBytes(c, out, path, data);
+    }
+
+    private static void writeBytes(Context c, Uri out, String path, byte[] data) throws Exception {
+        OutputStream os = c.getContentResolver().openOutputStream(out, "wt");
+        if (os == null) throw new Exception("Cannot write " + path);
+        try { os.write(data); } finally { try { os.close(); } catch (Exception ignored) { } }
+    }
+
+    private static boolean downloadLfsPointerIfNeeded(Context c, RepoProfile p, RepoId id, String path, byte[] data, Uri out) throws Exception {
+        if (data == null || data.length < 40 || data.length > 4096) return false;
+        String pointer;
+        try { pointer = new String(data, "UTF-8"); } catch (Exception e) { return false; }
+        if (!pointer.startsWith("version " + GitServerConfig.LFS_SPEC_URL)) return false;
+        String oid = null; long size = -1L; String[] lines = pointer.split("\n");
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i].trim();
+            if (line.startsWith("oid sha256:")) oid = line.substring(11).trim();
+            else if (line.startsWith("size ")) try { size = Long.parseLong(line.substring(5).trim()); } catch (Exception ignored) { }
+        }
+        if (oid == null || oid.length() != 64 || size < 0) return false;
+        Callback cb = callbackHolder.get(); if (cb != null) cb.progress("Git LFS download: " + path + " (" + (size / (1024L * 1024L)) + " MiB)");
+        JSONObject obj = new JSONObject(); obj.put("oid", oid); obj.put("size", size);
+        JSONArray objects = new JSONArray(); objects.put(obj);
+        JSONObject batch = new JSONObject(); batch.put("operation", "download"); JSONArray transfers = new JSONArray(); transfers.put("basic"); batch.put("transfers", transfers); batch.put("objects", objects);
+        String lfsBase = GitServerConfig.lfsBaseUrl(id.owner, id.repo);
+        JSONObject response = new JSONObject(lfsRequest("POST", lfsBase + "/objects/batch", p.token, "application/vnd.git-lfs+json", batch.toString()));
+        JSONObject result = response.getJSONArray("objects").getJSONObject(0);
+        if (result.has("error")) throw new Exception("Git LFS: " + result.getJSONObject("error").optString("message", "download rejected"));
+        JSONObject actions = result.optJSONObject("actions");
+        if (actions == null || !actions.has("download")) throw new Exception("Git LFS download action missing for " + path);
+        JSONObject action = actions.getJSONObject("download");
+        streamLfsDownload(c, out, path, size, action.getString("href"), action.optJSONObject("header"));
+        return true;
+    }
+
+    private static void streamLfsDownload(Context c, Uri outUri, String path, long size, String href, JSONObject headers) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection)new URL(href).openConnection(); conn.setConnectTimeout(20000); conn.setReadTimeout(300000); conn.setRequestMethod("GET");
+        if (headers != null) { java.util.Iterator<String> it = headers.keys(); while (it.hasNext()) { String k = it.next(); conn.setRequestProperty(k, headers.optString(k)); } }
+        int code = conn.getResponseCode(); if (code < 200 || code >= 300) { String text = readText(conn.getErrorStream()); conn.disconnect(); throw new Exception("Git LFS download HTTP " + code + ": " + text); }
+        InputStream in = conn.getInputStream(); OutputStream out = c.getContentResolver().openOutputStream(outUri, "wt"); if (out == null) { try { in.close(); } catch (Exception ignored) { } conn.disconnect(); throw new Exception("Cannot write " + path); }
+        byte[] b = new byte[64 * 1024]; int n; long got = 0; int last = -1;
+        try { while ((n = in.read(b)) >= 0) { checkCancelled(); if (n == 0) continue; out.write(b, 0, n); got += n; if (size > 0) { int pct = (int)(got * 100L / size); if (pct >= last + 10) { last = pct; Callback cb = callbackHolder.get(); if (cb != null) cb.progress("Downloading " + path + ": " + pct + "%"); } } } out.flush(); }
+        finally { try { in.close(); } catch (Exception ignored) { } try { out.close(); } catch (Exception ignored) { } conn.disconnect(); }
+        if (size >= 0 && got != size) throw new Exception("Git LFS download size mismatch for " + path + ": expected " + size + ", received " + got);
+    }
 
     private static int downloadRepository(Context c, RepoProfile p, RepoId id, Uri root) throws Exception {
         String branch = safeBranch(p.branch); String treeUrl = GitServerConfig.treeUrl(id.owner, id.repo, branch);
-        JSONArray items = new JSONObject(request("GET", treeUrl, p.token, null, null)).getJSONArray("tree"); int count = 0; int i; if (callbackHolder.get() != null) callbackHolder.get().progress("GitHub tree loaded: " + items.length() + " entries");
-        for (i = 0; i < items.length(); i++) { checkCancelled(); JSONObject item = items.getJSONObject(i); if (!"blob".equals(item.optString("type"))) continue; String path = item.optString("path"); if (path.length() == 0 || path.startsWith(".git/")) continue; if (callbackHolder.get() != null) callbackHolder.get().progress("Downloading: " + path); JSONObject blob = new JSONObject(request("GET", item.optString("url"), p.token, null, null)); byte[] data = Base64.decode(blob.optString("content").replace("\n", "").replace("\r", ""), Base64.DEFAULT); Uri out = ensureFile(c, root, path); OutputStream os = c.getContentResolver().openOutputStream(out, "wt"); if (os == null) throw new Exception("Cannot write " + path); os.write(data); os.close(); count++; }
+        JSONArray items = new JSONObject(request("GET", treeUrl, p.token, null, null)).getJSONArray("tree"); int count = 0; int i; if (callbackHolder.get() != null) callbackHolder.get().progress("" + GitServerConfig.SERVER_NAME + " tree loaded: " + items.length() + " entries");
+        for (i = 0; i < items.length(); i++) { checkCancelled(); JSONObject item = items.getJSONObject(i); if (!"blob".equals(item.optString("type"))) continue; String path = item.optString("path"); if (path.length() == 0 || path.startsWith(".git/")) continue; downloadPath(c, p, id, root, path, item.optString("sha")); count++; }
         return count;
     }
 
@@ -240,7 +290,7 @@ public class GitSyncEngine {
         byte[] b = new byte[64 * 1024]; int n; long sent = 0; int last = -1;
         try { while ((n = in.read(b)) >= 0) { checkCancelled(); if (n == 0) continue; out.write(b, 0, n); sent += n; if (size > 0) { int pct = (int)(sent * 90L / size); if (pct >= last + 10) { last = pct; Callback cb = callbackHolder.get(); if (cb != null) cb.progress("Uploading " + rel + ": " + pct + "%"); } } } out.flush(); }
         finally { try { in.close(); } catch (Exception ignored) {} try { out.close(); } catch (Exception ignored) {} }
-        Callback cb = callbackHolder.get(); if (cb != null) cb.progress("Finalizing on GitHub...");
+        Callback cb = callbackHolder.get(); if (cb != null) cb.progress("Finalizing on " + GitServerConfig.SERVER_NAME + "...");
         int code = conn.getResponseCode(); String text = readText(code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream()); conn.disconnect();
         if (code < 200 || code >= 300) throw new Exception("Git LFS upload HTTP " + code + ": " + text);
     }
@@ -266,7 +316,7 @@ public class GitSyncEngine {
             if (!"blob".equals(item.optString("type"))) continue;
             String path = item.optString("path");
             if (path.length() == 0 || path.startsWith(".git/") || local.contains(path)) continue;
-            if (callbackHolder.get() != null) callbackHolder.get().progress("Deleting from GitHub: " + path);
+            if (callbackHolder.get() != null) callbackHolder.get().progress("Deleting from " + GitServerConfig.SERVER_NAME + ": " + path);
             deleteRemoteFile(p, id, path, item.optString("sha"));
             deleted++;
         }
@@ -279,22 +329,16 @@ public class GitSyncEngine {
         JSONArray items = new JSONObject(request("GET", treeUrl, p.token, null, null)).getJSONArray("tree");
         HashSet<String> remote = new HashSet<String>();
         int downloaded = 0; int i;
-        if (callbackHolder.get() != null) callbackHolder.get().progress("GitHub tree loaded: " + items.length() + " entries");
+        if (callbackHolder.get() != null) callbackHolder.get().progress("" + GitServerConfig.SERVER_NAME + " tree loaded: " + items.length() + " entries");
         for (i = 0; i < items.length(); i++) { checkCancelled();
             JSONObject item = items.getJSONObject(i);
             if (!"blob".equals(item.optString("type"))) continue;
             String path = item.optString("path");
             if (path.length() == 0 || path.startsWith(".git/")) continue;
             remote.add(path);
-            if (callbackHolder.get() != null) callbackHolder.get().progress("Downloading: " + path);
-            JSONObject blob = new JSONObject(request("GET", item.optString("url"), p.token, null, null));
-            byte[] data = Base64.decode(blob.optString("content").replace("\n", "").replace("\r", ""), Base64.DEFAULT);
-            Uri out = ensureFile(c, root, path);
-            OutputStream os = c.getContentResolver().openOutputStream(out, "wt");
-            if (os == null) throw new Exception("Cannot write " + path);
-            os.write(data); os.close(); downloaded++;
+            downloadPath(c, p, id, root, path, item.optString("sha")); downloaded++;
         }
-        if (callbackHolder.get() != null) callbackHolder.get().progress("Removing local files that are not on GitHub...");
+        if (callbackHolder.get() != null) callbackHolder.get().progress("Removing local files that are not on " + GitServerConfig.SERVER_NAME + "...");
         int deleted = pruneLocal(c, root, root, "", remote);
         return new int[] { downloaded, deleted };
     }
@@ -345,9 +389,9 @@ public class GitSyncEngine {
                 return requestOnce(method, urlText, token, contentType, body);
             } catch (HttpError e) {
                 if (!isRetryableHttp(e.code) || attempt >= MAX_RETRIES) throw e;
-                retryWait(attempt, "GitHub HTTP " + e.code);
+                retryWait(attempt, GitServerConfig.SERVER_NAME + " HTTP " + e.code);
             } catch (UnknownHostException e) {
-                if (attempt >= MAX_RETRIES) throw new Exception("Cannot resolve api.github.com after " + MAX_RETRIES + " attempts. Check Wi-Fi/mobile data, Private DNS/VPN.");
+                if (attempt >= MAX_RETRIES) throw new Exception("Cannot resolve " + GitServerConfig.API_BASE_URL + " after " + MAX_RETRIES + " attempts. Check Wi-Fi/mobile data, Private DNS/VPN.");
                 retryWait(attempt, "DNS lookup failed");
             } catch (SocketTimeoutException e) {
                 if (attempt >= MAX_RETRIES) throw new Exception("Network timeout after " + MAX_RETRIES + " attempts.");
@@ -361,7 +405,7 @@ public class GitSyncEngine {
     }
     private static boolean isRetryableHttp(int code) { return code == 408 || code == 429 || code == 500 || code == 502 || code == 503 || code == 504; }
     private static void retryWait(int attempt, String reason) throws Exception { checkCancelled(); long wait = 1000L << (attempt - 1); if (wait > 12000L) wait = 12000L; if (callbackHolder.get() != null) callbackHolder.get().progress(reason + " - retry " + (attempt + 1) + "/" + MAX_RETRIES + " in " + (wait / 1000L) + "s"); try { Thread.sleep(wait); } catch (InterruptedException ignored) { } }
-    private static String requestOnce(String method, String urlText, String token, String contentType, String body) throws Exception { HttpURLConnection c = (HttpURLConnection)new URL(urlText).openConnection(); c.setConnectTimeout(20000); c.setReadTimeout(60000); c.setRequestMethod(method); c.setRequestProperty("Accept", "application/vnd.github+json"); c.setRequestProperty("X-GitHub-Api-Version", "2022-11-28"); c.setRequestProperty("User-Agent", "AIDE-GitSync"); if (token != null && token.trim().length() > 0) c.setRequestProperty("Authorization", "Bearer " + token.trim()); if (body != null) { c.setDoOutput(true); c.setRequestProperty("Content-Type", contentType == null ? "application/json; charset=UTF-8" : contentType); byte[] data = body.getBytes("UTF-8"); c.setFixedLengthStreamingMode(data.length); OutputStream os = c.getOutputStream(); os.write(data); os.close(); } int code = c.getResponseCode(); InputStream in = code >= 200 && code < 300 ? c.getInputStream() : c.getErrorStream(); String text = readText(in); c.disconnect(); if (code < 200 || code >= 300) { String message = text; try { message = new JSONObject(text).optString("message", text); } catch (Exception ignored) { } throw new HttpError(code, "GitHub HTTP " + code + ": " + message); } return text; }
+    private static String requestOnce(String method, String urlText, String token, String contentType, String body) throws Exception { HttpURLConnection c = (HttpURLConnection)new URL(urlText).openConnection(); c.setConnectTimeout(20000); c.setReadTimeout(60000); c.setRequestMethod(method); c.setRequestProperty("Accept", "application/vnd.github+json"); c.setRequestProperty("X-GitHub-Api-Version", "2022-11-28"); c.setRequestProperty("User-Agent", "AIDE-GitSync"); if (token != null && token.trim().length() > 0) c.setRequestProperty("Authorization", "Bearer " + token.trim()); if (body != null) { c.setDoOutput(true); c.setRequestProperty("Content-Type", contentType == null ? "application/json; charset=UTF-8" : contentType); byte[] data = body.getBytes("UTF-8"); c.setFixedLengthStreamingMode(data.length); OutputStream os = c.getOutputStream(); os.write(data); os.close(); } int code = c.getResponseCode(); InputStream in = code >= 200 && code < 300 ? c.getInputStream() : c.getErrorStream(); String text = readText(in); c.disconnect(); if (code < 200 || code >= 300) { String message = text; try { message = new JSONObject(text).optString("message", text); } catch (Exception ignored) { } throw new HttpError(code, GitServerConfig.SERVER_NAME + " HTTP " + code + ": " + message); } return text; }
     private static String readText(InputStream in) throws Exception { if (in == null) return ""; BufferedReader br = new BufferedReader(new InputStreamReader(in, "UTF-8")); StringBuilder sb = new StringBuilder(); String line; while ((line = br.readLine()) != null) sb.append(line).append('\n'); br.close(); return sb.toString(); }
     private static String enc(String s) throws Exception { return URLEncoder.encode(s, "UTF-8").replace("+", "%20"); }
     private static String encodePath(String path) throws Exception { String[] parts = path.split("/"); StringBuilder b = new StringBuilder(); int i; for (i = 0; i < parts.length; i++) { if (i > 0) b.append('/'); b.append(enc(parts[i])); } return b.toString(); }
