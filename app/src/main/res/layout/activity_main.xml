@@ -1,0 +1,33 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/rootLayout" android:orientation="vertical" android:background="#F5F7FA" android:clipToPadding="true" android:layout_width="match_parent" android:layout_height="match_parent">
+    <LinearLayout android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="16dp" android:paddingTop="12dp" android:paddingRight="16dp" android:paddingBottom="12dp" android:background="@drawable/bg_header" android:layout_width="match_parent" android:layout_height="wrap_content">
+        <TextView android:text="myGitSync" android:textColor="#FFFFFF" android:textSize="25sp" android:textStyle="bold" android:gravity="center_vertical" android:layout_width="wrap_content" android:layout_height="44dp" />
+    </LinearLayout>
+    <LinearLayout android:orientation="vertical" android:paddingLeft="16dp" android:paddingTop="12dp" android:paddingRight="16dp" android:paddingBottom="10dp" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+        <LinearLayout android:background="@drawable/bg_card" android:gravity="center_vertical" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <TextView android:id="@+id/authStatus" android:text="GitHub: Not signed in" android:textColor="#263238" android:textSize="16sp" android:textStyle="bold" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" />
+            <TextView android:text="●" android:textColor="#2E7D32" android:textSize="22sp" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        </LinearLayout>
+        <LinearLayout android:orientation="horizontal" android:paddingTop="10dp" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <Button android:id="@+id/settingsButton" android:gravity="center" android:text="OAuth Settings" android:textColor="#FFFFFF" android:textStyle="bold" android:textSize="12sp" android:background="@drawable/bg_button_primary" android:layout_marginRight="5dp" android:layout_width="0dp" android:layout_weight="1" android:layout_height="52dp" />
+            <Button android:id="@+id/loginButton" android:gravity="center" android:text="Sign in" android:textColor="#263238" android:textStyle="bold" android:textSize="12sp" android:background="@drawable/bg_button_light" android:layout_marginLeft="5dp" android:layout_width="0dp" android:layout_weight="1" android:layout_height="52dp" />
+        </LinearLayout>
+        <LinearLayout android:orientation="horizontal" android:paddingTop="8dp" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <Button android:id="@+id/addButton" android:gravity="center" android:text="Add Repository" android:textColor="#FFFFFF" android:textStyle="bold" android:background="@drawable/bg_button_green" android:layout_marginRight="5dp" android:layout_width="0dp" android:layout_weight="1" android:layout_height="52dp" />
+            <Button android:id="@+id/syncAllButton" android:gravity="center" android:text="Sync All" android:textColor="#FFFFFF" android:textStyle="bold" android:background="@drawable/bg_button_purple" android:layout_marginLeft="5dp" android:layout_width="0dp" android:layout_weight="1" android:layout_height="52dp" />
+        </LinearLayout>
+        <LinearLayout android:orientation="vertical" android:background="@drawable/bg_card" android:layout_marginTop="12dp" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+            <TextView android:text="Repositories" android:textColor="#263238" android:textSize="17sp" android:textStyle="bold" android:paddingBottom="0dp" android:layout_width="match_parent" android:layout_height="wrap_content" />
+            <ListView android:id="@+id/repoList" android:paddingTop="0dp" android:clipToPadding="false" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:divider="#E7ECF2" android:dividerHeight="1dp" android:listSelector="#E8F1FF" />
+        </LinearLayout>
+        <LinearLayout android:orientation="vertical" android:background="@drawable/bg_card" android:layout_marginTop="10dp" android:layout_width="match_parent" android:layout_height="190dp">
+            <LinearLayout android:orientation="horizontal" android:gravity="center_vertical" android:paddingBottom="6dp" android:layout_width="match_parent" android:layout_height="wrap_content">
+                <TextView android:text="Sync Log" android:textColor="#263238" android:textSize="17sp" android:textStyle="bold" android:layout_weight="1" android:layout_width="0dp" android:layout_height="wrap_content" />
+                <Button android:id="@+id/stopButton" android:gravity="center" android:text="STOP" android:textColor="#FFFFFF" android:textStyle="bold" android:textSize="11sp" android:background="@drawable/bg_button_stop" android:visibility="gone" android:minHeight="0dp" android:minWidth="0dp" android:layout_marginRight="6dp" android:layout_width="86dp" android:layout_height="36dp" />
+                <Button android:id="@+id/clearLogButton" android:gravity="center" android:text="Clear" android:textColor="#455A64" android:textStyle="bold" android:textSize="11sp" android:background="@drawable/bg_button_light" android:minHeight="0dp" android:minWidth="0dp" android:layout_width="92dp" android:layout_height="36dp" />
+            </LinearLayout>
+            <ScrollView android:id="@+id/logScroll" android:background="@drawable/bg_log" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:fillViewport="true">
+                <TextView android:id="@+id/statusText" android:text="Ready" android:textColor="#D7E3F4" android:fontFamily="monospace" android:padding="10dp" android:textSize="12sp" android:textIsSelectable="true" android:layout_width="match_parent" android:layout_height="wrap_content" />
+            </ScrollView>
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>
