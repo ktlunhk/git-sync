@@ -122,11 +122,11 @@ public class MainActivity extends Activity {
         TextView authStatus = (TextView)findViewById(R.id.authStatus);
         Button loginButton = (Button)findViewById(R.id.loginButton);
         if (GitHubAuth.signedIn(this)) {
-            authStatus.setText("GitHub: Signed in");
-            setButtonIconText(loginButton, R.drawable.ic_action_login, "SIGN OUT FROM GITHUB");
+            authStatus.setText(GitServerConfig.SERVER_NAME + ": Signed in");
+            setButtonIconText(loginButton, R.drawable.ic_action_login, "SIGN OUT FROM " + GitServerConfig.SERVER_NAME.toUpperCase());
         } else {
-            authStatus.setText("GitHub: Not signed in");
-            setButtonIconText(loginButton, R.drawable.ic_action_login, "SIGN IN WITH GITHUB");
+            authStatus.setText(GitServerConfig.SERVER_NAME + ": Not signed in");
+            setButtonIconText(loginButton, R.drawable.ic_action_login, "SIGN IN WITH " + GitServerConfig.SERVER_NAME.toUpperCase());
         }
     }
 
@@ -261,33 +261,33 @@ public class MainActivity extends Activity {
     private void showActions(final int pos) {
         final RepoProfile r = repos.get(pos); final AlertDialog dialog = new AlertDialog.Builder(this).setTitle(r.name).create();
         LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(18),dp(4),dp(18),dp(14));
-        String[] names={"Sync (download + upload)","Download from GitHub","Upload to GitHub","Mirror local to GitHub","Mirror GitHub to local","Edit","Delete repository"};
+        String[] names={"Sync (download + upload)","Download from " + GitServerConfig.SERVER_NAME,"Upload to " + GitServerConfig.SERVER_NAME,"Mirror local to " + GitServerConfig.SERVER_NAME,"Mirror " + GitServerConfig.SERVER_NAME + " to local","Edit","Delete repository"};
         int[] icons={R.drawable.ic_action_sync_dark,R.drawable.ic_action_download,R.drawable.ic_action_upload,R.drawable.ic_action_mirror_up,R.drawable.ic_action_mirror_down,R.drawable.ic_action_edit,R.drawable.ic_action_delete};
         for(int i=0;i<names.length;i++){ final int which=i; Button bt=new Button(this); bt.setText(names[i]); bt.setTextSize(16); bt.setGravity(android.view.Gravity.LEFT|android.view.Gravity.CENTER_VERTICAL); bt.setPadding(dp(18),0,dp(12),0); bt.setCompoundDrawablesWithIntrinsicBounds(icons[i],0,0,0); bt.setCompoundDrawablePadding(dp(12)); bt.setBackgroundResource(R.drawable.bg_button_light); if(i==6) bt.setTextColor(0xFFC62828); LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,dp(52)); lp.setMargins(0,dp(5),0,0); box.addView(bt,lp); bt.setOnClickListener(new View.OnClickListener(){ public void onClick(View v){ dialog.dismiss(); if(which==0)syncOne(r); else if(which==1)downloadOne(r); else if(which==2)uploadOne(r); else if(which==3)confirmMirror(r); else if(which==4)confirmRemoteMirror(r); else if(which==5)showEditor(pos); else confirmDelete(pos); }}); }
         dialog.setView(box); dialog.setOnShowListener(new DialogInterface.OnShowListener(){ public void onShow(DialogInterface d){ polishDialog(dialog); }}); dialog.show();
     }
 
     private void confirmDelete(final int pos) {
-        final RepoProfile r=repos.get(pos); final AlertDialog d=new AlertDialog.Builder(this).setTitle("Delete repository?").setMessage("WARNING: Remove \""+r.name+"\" from myGitSync?\n\nThis only removes the saved repository entry. It will NOT delete the GitHub repository or any files in the local folder.").setNegativeButton("CANCEL",null).setPositiveButton("DELETE",new DialogInterface.OnClickListener(){ public void onClick(DialogInterface x,int w){ repos.remove(pos); RepoStore.save(MainActivity.this,repos); refresh(); Toast.makeText(MainActivity.this,"Repository entry removed",Toast.LENGTH_SHORT).show(); }}).create(); d.setOnShowListener(new DialogInterface.OnShowListener(){ public void onShow(DialogInterface x){ polishDialog(d); d.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(0xFFC62828); }}); d.show();
+        final RepoProfile r=repos.get(pos); final AlertDialog d=new AlertDialog.Builder(this).setTitle("Delete repository?").setMessage("WARNING: Remove \""+r.name+"\" from myGitSync?\n\nThis only removes the saved repository entry. It will NOT delete the " + GitServerConfig.SERVER_NAME + " repository or any files in the local folder.").setNegativeButton("CANCEL",null).setPositiveButton("DELETE",new DialogInterface.OnClickListener(){ public void onClick(DialogInterface x,int w){ repos.remove(pos); RepoStore.save(MainActivity.this,repos); refresh(); Toast.makeText(MainActivity.this,"Repository entry removed",Toast.LENGTH_SHORT).show(); }}).create(); d.setOnShowListener(new DialogInterface.OnShowListener(){ public void onShow(DialogInterface x){ polishDialog(d); d.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(0xFFC62828); }}); d.show();
     }
 
     private void confirmMirror(final RepoProfile r) {
-        new AlertDialog.Builder(this).setTitle("Mirror local to GitHub").setMessage("GitHub will be made the same as the selected local folder. Files that exist only on GitHub will be DELETED. Continue?").setPositiveButton("Mirror", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { mirrorOne(r); } }).setNegativeButton("Cancel", null).show();
+        new AlertDialog.Builder(this).setTitle("Mirror local to " + GitServerConfig.SERVER_NAME).setMessage(GitServerConfig.SERVER_NAME + " will be made the same as the selected local folder. Files that exist only on " + GitServerConfig.SERVER_NAME + " will be DELETED. Continue?").setPositiveButton("Mirror", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { mirrorOne(r); } }).setNegativeButton("Cancel", null).show();
     }
 
     private void confirmRemoteMirror(final RepoProfile r) {
-        new AlertDialog.Builder(this).setTitle("Mirror GitHub to local").setMessage("The selected local folder will be made the same as GitHub. Local files that do not exist on GitHub will be DELETED. Continue?").setPositiveButton("Mirror", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { mirrorRemoteOne(r); } }).setNegativeButton("Cancel", null).show();
+        new AlertDialog.Builder(this).setTitle("Mirror " + GitServerConfig.SERVER_NAME + " to local").setMessage("The selected local folder will be made the same as " + GitServerConfig.SERVER_NAME + ". Local files that do not exist on " + GitServerConfig.SERVER_NAME + " will be DELETED. Continue?").setPositiveButton("Mirror", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { mirrorRemoteOne(r); } }).setNegativeButton("Cancel", null).show();
     }
 
     private void mirrorRemoteOne(final RepoProfile r) {
         if (!prepareAuth(r)) return;
-        beginWork(); status.setText("Mirroring " + r.name + " from GitHub to local folder...");
+        beginWork(); status.setText("Mirroring " + r.name + " from " + GitServerConfig.SERVER_NAME + " to local folder...");
         GitSyncEngine.mirrorRemoteToLocal(MainActivity.this, r, creationCallback(r));
     }
 
     private void mirrorOne(final RepoProfile r) {
         if (!prepareAuth(r)) return;
-        beginWork(); status.setText("Mirroring " + r.name + " from local folder to GitHub...");
+        beginWork(); status.setText("Mirroring " + r.name + " from local folder to " + GitServerConfig.SERVER_NAME + "...");
         GitSyncEngine.mirrorLocalToRemote(MainActivity.this, r, creationCallback(r));
     }
 
@@ -315,14 +315,14 @@ public class MainActivity extends Activity {
 
     private void showOAuthSettings() {
         LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); int pad = 28; box.setPadding(pad, 10, pad, 8);
-        final EditText clientId = field("Enter GitHub OAuth Client ID"); clientId.setSingleLine(true); clientId.setText(GitHubAuth.clientId(this)); styleDialogField(clientId);
-        final EditText clientSecret = field("Enter GitHub OAuth Client Secret"); clientSecret.setSingleLine(true); clientSecret.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD); clientSecret.setText(GitHubAuth.clientSecret(this)); styleDialogField(clientSecret);
+        final EditText clientId = field("Enter " + GitServerConfig.SERVER_NAME + " OAuth Client ID"); clientId.setSingleLine(true); clientId.setText(GitHubAuth.clientId(this)); styleDialogField(clientId);
+        final EditText clientSecret = field("Enter " + GitServerConfig.SERVER_NAME + " OAuth Client Secret"); clientSecret.setSingleLine(true); clientSecret.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD); clientSecret.setText(GitHubAuth.clientSecret(this)); styleDialogField(clientSecret);
         final EditText redirect = field("alexgitsync://auth"); redirect.setSingleLine(true); redirect.setText(GitHubAuth.redirectUri(this)); styleDialogField(redirect);
-        TextView note = new TextView(this); note.setText("These values are saved on this device. The included Android manifest can automatically return from alexgitsync://auth. If you use another callback scheme/host, add a matching intent-filter before building. Saving or clearing signs out the current GitHub session."); note.setPadding(0, 12, 0, 0);
+        TextView note = new TextView(this); note.setText("These values are saved on this device. The included Android manifest can automatically return from alexgitsync://auth. If you use another callback scheme/host, add a matching intent-filter before building. Saving or clearing signs out the current " + GitServerConfig.SERVER_NAME + " session."); note.setPadding(0, 12, 0, 0);
         box.addView(dialogLabel("CLIENT ID")); box.addView(clientId); box.addView(dialogLabel("CLIENT SECRET")); box.addView(clientSecret); box.addView(dialogLabel("REDIRECT URL")); box.addView(redirect); box.addView(note);
-        final AlertDialog dialog = new AlertDialog.Builder(this).setTitle("GitHub OAuth Settings").setView(box).setPositiveButton("Save", null).setNeutralButton("Clear", null).setNegativeButton("Cancel", null).create();
+        final AlertDialog dialog = new AlertDialog.Builder(this).setTitle(GitServerConfig.SERVER_NAME + " OAuth Settings").setView(box).setPositiveButton("Save", null).setNeutralButton("Clear", null).setNegativeButton("Cancel", null).create();
         dialog.setOnShowListener(new DialogInterface.OnShowListener() { public void onShow(DialogInterface d) { polishDialog(dialog);
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() { public void onClick(View v) { String id = clientId.getText().toString().trim(); String secret = clientSecret.getText().toString().trim(); String callback = redirect.getText().toString().trim(); if (id.length() == 0) { clientId.setError("Required"); clientId.requestFocus(); return; } if (secret.length() == 0) { clientSecret.setError("Required"); clientSecret.requestFocus(); return; } if (callback.length() == 0) { redirect.setError("Required"); redirect.requestFocus(); return; } Uri callbackUri = Uri.parse(callback); if (callbackUri.getScheme() == null || callbackUri.getScheme().length() == 0) { Toast.makeText(MainActivity.this, "Redirect URL must include a scheme, for example alexgitsync://auth", Toast.LENGTH_LONG).show(); return; } GitHubAuth.saveOAuthSettings(MainActivity.this, id, secret, callback); updateAuthUi(); status.setText("OAuth settings saved. Please sign in with GitHub."); dialog.dismiss(); } });
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() { public void onClick(View v) { String id = clientId.getText().toString().trim(); String secret = clientSecret.getText().toString().trim(); String callback = redirect.getText().toString().trim(); if (id.length() == 0) { clientId.setError("Required"); clientId.requestFocus(); return; } if (secret.length() == 0) { clientSecret.setError("Required"); clientSecret.requestFocus(); return; } if (callback.length() == 0) { redirect.setError("Required"); redirect.requestFocus(); return; } Uri callbackUri = Uri.parse(callback); if (callbackUri.getScheme() == null || callbackUri.getScheme().length() == 0) { Toast.makeText(MainActivity.this, "Redirect URL must include a scheme, for example alexgitsync://auth", Toast.LENGTH_LONG).show(); return; } GitHubAuth.saveOAuthSettings(MainActivity.this, id, secret, callback); updateAuthUi(); status.setText("OAuth settings saved. Please sign in with " + GitServerConfig.SERVER_NAME + "."); dialog.dismiss(); } });
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(new View.OnClickListener() { public void onClick(View v) { GitHubAuth.clearOAuthSettings(MainActivity.this); clientId.setText(GitHubAuth.clientId(MainActivity.this)); clientSecret.setText(GitHubAuth.clientSecret(MainActivity.this)); redirect.setText(GitHubAuth.redirectUri(MainActivity.this)); updateAuthUi(); status.setText("Saved OAuth settings cleared. OAuthConfig.java fallback will be used."); dialog.dismiss(); } });
         }});
         dialog.show();
@@ -330,9 +330,9 @@ public class MainActivity extends Activity {
 
     private void loginOrLogout() {
         if (GitHubAuth.signedIn(this)) { GitHubAuth.signOut(this); updateAuthUi(); status.setText("Signed out"); return; }
-        if (!GitHubAuth.isConfigured(this)) { status.setText("GitHub OAuth settings required"); showOAuthSettings(); return; }
-        status.setText("Opening GitHub authorization...");
-        try { openOAuthCustomTab(GitHubAuth.createAuthorizationUrl(this)); } catch (Exception e) { status.setText("Unable to open GitHub: " + e.getMessage()); }
+        if (!GitHubAuth.isConfigured(this)) { status.setText(GitServerConfig.SERVER_NAME + " OAuth settings required"); showOAuthSettings(); return; }
+        status.setText("Opening " + GitServerConfig.SERVER_NAME + " authorization...");
+        try { openOAuthCustomTab(GitHubAuth.createAuthorizationUrl(this)); } catch (Exception e) { status.setText("Unable to open " + GitServerConfig.SERVER_NAME + ": " + e.getMessage()); }
     }
 
     private void openOAuthCustomTab(String url) {
@@ -358,15 +358,15 @@ public class MainActivity extends Activity {
         Uri configured = Uri.parse(GitHubAuth.redirectUri(this)); if (configured.getScheme() == null || !configured.getScheme().equals(u.getScheme())) return; if (configured.getHost() != null && !configured.getHost().equals(u.getHost())) return;
         setIntent(new Intent());
         final String code = u.getQueryParameter("code"); final String state = u.getQueryParameter("state"); final String error = u.getQueryParameter("error");
-        if (error != null && error.length() > 0) { status.setText("GitHub authorization failed: " + error); return; }
-        if (code == null || code.length() == 0) { status.setText("GitHub did not return an authorization code."); return; }
-        status.setText("Completing GitHub sign in...");
+        if (error != null && error.length() > 0) { status.setText(GitServerConfig.SERVER_NAME + " authorization failed: " + error); return; }
+        if (code == null || code.length() == 0) { status.setText(GitServerConfig.SERVER_NAME + " did not return an authorization code."); return; }
+        status.setText("Completing " + GitServerConfig.SERVER_NAME + " sign in...");
         GitHubAuth.exchangeCode(this, code, state, new GitHubAuth.AuthCallback() { public void done(final boolean ok, final String message) { runOnUiThread(new Runnable() { public void run() { updateAuthUi(); status.setText(message); Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show(); } }); } });
     }
 
     private boolean prepareAuth(RepoProfile r) {
         String t = GitHubAuth.token(this);
-        if (t.length() == 0) { Toast.makeText(this, "Sign in with GitHub first.", Toast.LENGTH_LONG).show(); return false; }
+        if (t.length() == 0) { Toast.makeText(this, "Sign in with " + GitServerConfig.SERVER_NAME + " first.", Toast.LENGTH_LONG).show(); return false; }
         r.token = t; return true;
     }
 
@@ -378,7 +378,7 @@ public class MainActivity extends Activity {
         runOnUiThread(new Runnable() { public void run() {
             final AlertDialog q = new AlertDialog.Builder(MainActivity.this)
                 .setTitle("Repository not found")
-                .setMessage("The GitHub repository " + owner + "/" + repository + " does not exist or is not accessible.\n\nCreate a new PUBLIC repository with this name and continue the operation?")
+                .setMessage("The " + GitServerConfig.SERVER_NAME + " repository " + owner + "/" + repository + " does not exist or is not accessible.\n\nCreate a new PUBLIC repository with this name and continue the operation?")
                 .setPositiveButton("Create repository", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { answer.set(true); latch.countDown(); } })
                 .setNegativeButton("Cancel", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { answer.set(false); latch.countDown(); } })
                 .setOnCancelListener(new DialogInterface.OnCancelListener() { public void onCancel(DialogInterface d) { answer.set(false); latch.countDown(); } })
@@ -407,10 +407,21 @@ public class MainActivity extends Activity {
 
     private void showSyncPreview(final RepoProfile r, GitSyncEngine.SyncPreview x) {
         StringBuilder b=new StringBuilder(); b.append(x.summary());
-        if(x.conflict>0){ b.append("\n\nConflicts are protected and will be skipped. Use Upload or Download from the repository actions to choose which copy should win."); int n=Math.min(5,x.conflicts.size()); for(int i=0;i<n;i++)b.append("\n• ").append(x.conflicts.get(i)); if(x.conflicts.size()>n)b.append("\n• ..."); }
-        b.append("\n\nOnly local-only files will upload and GitHub-only files will download.");
+        appendPreviewSection(b, "UPLOAD", x.uploads);
+        appendPreviewSection(b, "DOWNLOAD", x.downloads);
+        appendPreviewSection(b, "CONFLICT — skipped", x.conflicts);
+        if(x.conflict>0) b.append("\n\nConflicts are protected. Use Upload or Download from the repository actions to choose which copy should win.");
+        b.append("\n\nOnly local-only files will upload and " + GitServerConfig.SERVER_NAME + "-only files will download.");
         final AlertDialog d=new AlertDialog.Builder(this).setTitle("Sync Preview — " + r.name).setMessage(b.toString()).setNegativeButton("CANCEL",null).setPositiveButton("SYNC",new DialogInterface.OnClickListener(){public void onClick(DialogInterface q,int w){ beginWork(); updateRepoStatus(r,"Syncing..."); GitSyncEngine.sync(MainActivity.this,r,creationCallback(r)); }}).create();
         d.setOnShowListener(new DialogInterface.OnShowListener(){public void onShow(DialogInterface q){polishDialog(d);}}); d.show();
+    }
+
+    private void appendPreviewSection(StringBuilder b, String title, java.util.ArrayList<String> files) {
+        if (files == null || files.size() == 0) return;
+        b.append("\n\n").append(title).append(" (").append(files.size()).append(")");
+        int limit = Math.min(20, files.size());
+        for (int i = 0; i < limit; i++) b.append("\n• ").append(files.get(i));
+        if (files.size() > limit) b.append("\n• ... and ").append(files.size() - limit).append(" more");
     }
 
     private void downloadOne(final RepoProfile r) {
