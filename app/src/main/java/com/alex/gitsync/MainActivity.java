@@ -218,7 +218,7 @@ public class MainActivity extends Activity {
 
     private void showEditor(final int index) {
         LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); int pad = dp(22); box.setPadding(pad,dp(6),pad,dp(10));
-        final EditText name = field("Display name"); final EditText url = field("https://github.com/user/repo.git"); final EditText branch = field("Branch (main)");
+        final EditText name = field("Display name"); final EditText url = field(GitServerConfig.repositoryExampleUrl()); final EditText branch = field("Branch (main)");
         final EditText path = field("Local folder path"); path.setFocusable(false); path.setClickable(true);
         styleDialogField(name); styleDialogField(url); styleDialogField(branch); styleDialogField(path);
         final Button selectFolder = new Button(this); selectFolder.setText("SELECT LOCAL FOLDER"); selectFolder.setBackgroundResource(R.drawable.bg_button_light);
@@ -232,7 +232,7 @@ public class MainActivity extends Activity {
                 String n=name.getText().toString().trim(), u=url.getText().toString().trim(), b=branch.getText().toString().trim(), pa=path.getText().toString().trim();
                 if(n.length()==0){ name.setError("Required"); name.requestFocus(); return; }
                 if(u.length()==0){ url.setError("Required"); url.requestFocus(); return; }
-                if(!(u.startsWith("https://github.com/") || u.startsWith("http://github.com/"))){ url.setError("Enter a GitHub repository URL"); url.requestFocus(); return; }
+                if(!GitServerConfig.isRepositoryUrl(u)){ url.setError("Enter a " + GitServerConfig.SERVER_NAME + " repository URL"); url.requestFocus(); return; }
                 if(b.length()==0){ branch.setError("Required"); branch.requestFocus(); return; }
                 if(pa.length()==0){ path.setError("Select a local folder"); return; }
                 RepoProfile r = new RepoProfile(n,u,b,pa,"",""); if(index<0) repos.add(r); else repos.set(index,r); RepoStore.save(MainActivity.this,repos); refresh(); dialog.dismiss();
