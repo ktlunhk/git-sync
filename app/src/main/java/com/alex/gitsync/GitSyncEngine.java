@@ -50,7 +50,7 @@ public class GitSyncEngine {
 
     public static void previewSync(final Context c, final RepoProfile p, final PreviewCallback pcb) {
         new Thread(new Runnable() { public void run() { try {
-            RepoId id = parseRepo(p.url); if (id == null) throw new Exception("Invalid GitHub repository URL");
+            RepoId id = parseRepo(p.url); if (id == null) throw new Exception("Invalid " + GitServerConfig.SERVER_NAME + " repository URL");
             if (p.localPath == null || !p.localPath.startsWith("content://")) throw new Exception("Select the local folder again.");
             Uri root = treeDocumentUri(Uri.parse(p.localPath));
             pcb.ready(buildPreview(c, p, id, root));
@@ -60,7 +60,7 @@ public class GitSyncEngine {
     private static void runTask(final Context c, final RepoProfile p, final Callback cb, final int mode) {
         new Thread(new Runnable() { public void run() { try {
             cancelRequested = false; callbackHolder.set(cb); cb.progress("Starting " + p.name + "...");
-            RepoId id = parseRepo(p.url); if (id == null) throw new Exception("Use a GitHub repository URL such as https://github.com/user/repo.git");
+            RepoId id = parseRepo(p.url); if (id == null) throw new Exception("Use a " + GitServerConfig.SERVER_NAME + " repository URL such as " + GitServerConfig.repositoryExampleUrl());
             ensureRepositoryExists(p, id);
             if (p.localPath == null || !p.localPath.startsWith("content://")) throw new Exception("Select the local folder again using Select local folder so Android can grant access.");
             Uri tree = Uri.parse(p.localPath); Uri root = treeDocumentUri(tree); int down = 0; int up = 0; cb.progress("Local folder access OK");
@@ -75,20 +75,20 @@ public class GitSyncEngine {
 
 
     private static void ensureRepositoryExists(RepoProfile p, RepoId id) throws Exception {
-        String api = "https://api.github.com/repos/" + enc(id.owner) + "/" + enc(id.repo);
+        String api = GitServerConfig.repoApiUrl(id.owner, id.repo);
         try { request("GET", api, p.token, null, null); return; } catch (HttpError e) { if (e.code != 404) throw e; }
         Callback cb = callbackHolder.get();
-        if (!(cb instanceof CreationCallback)) throw new Exception("GitHub repository not found: " + id.owner + "/" + id.repo);
+        if (!(cb instanceof CreationCallback)) throw new Exception(GitServerConfig.SERVER_NAME + " repository not found: " + id.owner + "/" + id.repo);
         if (!((CreationCallback)cb).confirmCreateRepository(id.owner, id.repo)) throw new Exception("Repository creation cancelled by user");
-        if (cb != null) cb.progress("Creating GitHub repository: " + id.owner + "/" + id.repo);
-        JSONObject user = new JSONObject(request("GET", "https://api.github.com/user", p.token, null, null));
+        if (cb != null) cb.progress("Creating " + GitServerConfig.SERVER_NAME + " repository: " + id.owner + "/" + id.repo);
+        JSONObject user = new JSONObject(request("GET", GitServerConfig.currentUserUrl(), p.token, null, null));
         String login = user.optString("login", "");
         String createUrl;
-        if (login.equalsIgnoreCase(id.owner)) createUrl = "https://api.github.com/user/repos"; else createUrl = "https://api.github.com/orgs/" + enc(id.owner) + "/repos";
+        if (login.equalsIgnoreCase(id.owner)) createUrl = GitServerConfig.createUserRepoUrl(); else createUrl = GitServerConfig.createOrgRepoUrl(id.owner);
         JSONObject body = new JSONObject(); body.put("name", id.repo); body.put("description", "Created by myGitSync"); body.put("private", false); body.put("auto_init", true);
         JSONObject created = new JSONObject(request("POST", createUrl, p.token, "application/json; charset=UTF-8", body.toString()));
         String fullName = created.optString("full_name", id.owner + "/" + id.repo);
-        if (cb != null) cb.progress("Created GitHub repository: " + fullName);
+        if (cb != null) cb.progress("Created " + GitServerConfig.SERVER_NAME + " repository: " + fullName);
         String defaultBranch = created.optString("default_branch", "");
         if (defaultBranch.length() > 0 && (p.branch == null || p.branch.trim().length() == 0 || "main".equals(p.branch.trim()))) p.branch = defaultBranch;
     }
@@ -125,7 +125,7 @@ public class GitSyncEngine {
     }
 
     private static HashMap<String,String> remoteShas(RepoProfile p, RepoId id) throws Exception {
-        String treeUrl="https://api.github.com/repos/"+enc(id.owner)+"/"+enc(id.repo)+"/git/trees/"+enc(safeBranch(p.branch))+"?recursive=1";
+        String treeUrl=GitServerConfig.treeUrl(id.owner,id.repo,safeBranch(p.branch));
         JSONArray a=new JSONObject(request("GET",treeUrl,p.token,null,null)).getJSONArray("tree"); HashMap<String,String> m=new HashMap<String,String>();
         for(int i=0;i<a.length();i++){ JSONObject o=a.getJSONObject(i); if("blob".equals(o.optString("type"))) m.put(o.optString("path"),o.optString("sha")); } return m;
     }
@@ -137,10 +137,10 @@ public class GitSyncEngine {
 
     private static String gitBlobSha(Context c, Uri file) throws Exception { long size=getFileSize(c,file); MessageDigest md=MessageDigest.getInstance("SHA-1"); md.update(("blob "+size+"\0").getBytes("UTF-8")); InputStream in=c.getContentResolver().openInputStream(file); byte[] b=new byte[32768]; int n; while((n=in.read(b))>0)md.update(b,0,n); in.close(); byte[] d=md.digest(); StringBuilder x=new StringBuilder(); for(byte q:d)x.append(String.format("%02x",q&255)); return x.toString(); }
 
-    private static void downloadPath(Context c, RepoProfile p, RepoId id, Uri root, String path, String sha) throws Exception { if(callbackHolder.get()!=null)callbackHolder.get().progress("Downloading: "+path); JSONObject blob=new JSONObject(request("GET","https://api.github.com/repos/"+enc(id.owner)+"/"+enc(id.repo)+"/git/blobs/"+enc(sha),p.token,null,null)); byte[] data=Base64.decode(blob.optString("content").replace("\n","").replace("\r",""),Base64.DEFAULT); Uri out=ensureFile(c,root,path); OutputStream os=c.getContentResolver().openOutputStream(out,"wt"); if(os==null)throw new Exception("Cannot write "+path); os.write(data); os.close(); }
+    private static void downloadPath(Context c, RepoProfile p, RepoId id, Uri root, String path, String sha) throws Exception { if(callbackHolder.get()!=null)callbackHolder.get().progress("Downloading: "+path); JSONObject blob=new JSONObject(request("GET",GitServerConfig.blobUrl(id.owner,id.repo,sha),p.token,null,null)); byte[] data=Base64.decode(blob.optString("content").replace("\n","").replace("\r",""),Base64.DEFAULT); Uri out=ensureFile(c,root,path); OutputStream os=c.getContentResolver().openOutputStream(out,"wt"); if(os==null)throw new Exception("Cannot write "+path); os.write(data); os.close(); }
 
     private static int downloadRepository(Context c, RepoProfile p, RepoId id, Uri root) throws Exception {
-        String branch = safeBranch(p.branch); String treeUrl = "https://api.github.com/repos/" + enc(id.owner) + "/" + enc(id.repo) + "/git/trees/" + enc(branch) + "?recursive=1";
+        String branch = safeBranch(p.branch); String treeUrl = GitServerConfig.treeUrl(id.owner, id.repo, branch);
         JSONArray items = new JSONObject(request("GET", treeUrl, p.token, null, null)).getJSONArray("tree"); int count = 0; int i; if (callbackHolder.get() != null) callbackHolder.get().progress("GitHub tree loaded: " + items.length() + " entries");
         for (i = 0; i < items.length(); i++) { checkCancelled(); JSONObject item = items.getJSONObject(i); if (!"blob".equals(item.optString("type"))) continue; String path = item.optString("path"); if (path.length() == 0 || path.startsWith(".git/")) continue; if (callbackHolder.get() != null) callbackHolder.get().progress("Downloading: " + path); JSONObject blob = new JSONObject(request("GET", item.optString("url"), p.token, null, null)); byte[] data = Base64.decode(blob.optString("content").replace("\n", "").replace("\r", ""), Base64.DEFAULT); Uri out = ensureFile(c, root, path); OutputStream os = c.getContentResolver().openOutputStream(out, "wt"); if (os == null) throw new Exception("Cannot write " + path); os.write(data); os.close(); count++; }
         return count;
@@ -156,7 +156,7 @@ public class GitSyncEngine {
     }
 
     private static void uploadFile(Context c, RepoProfile p, RepoId id, Uri file, String rel) throws Exception {
-        String api = "https://api.github.com/repos/" + enc(id.owner) + "/" + enc(id.repo) + "/contents/" + encodePath(rel);
+        String api = GitServerConfig.contentsUrl(id.owner, id.repo, rel);
         String sha = null;
         try { sha = new JSONObject(request("GET", api + "?ref=" + enc(safeBranch(p.branch)), p.token, null, null)).optString("sha", null); }
         catch (HttpError e) { if (e.code != 404) throw e; }
@@ -198,7 +198,7 @@ public class GitSyncEngine {
         if (cb != null) cb.progress("Large file: " + rel + " (" + (size / (1024L * 1024L)) + " MiB) - using Git LFS");
         if (cb != null) cb.progress("Preparing large file (SHA-256)...");
         String oid = sha256(c, file, rel);
-        String lfsBase = "https://github.com/" + enc(id.owner) + "/" + enc(id.repo) + ".git/info/lfs";
+        String lfsBase = GitServerConfig.lfsBaseUrl(id.owner, id.repo);
         JSONObject obj = new JSONObject(); obj.put("oid", oid); obj.put("size", size);
         JSONArray objs = new JSONArray(); objs.put(obj);
         JSONObject batch = new JSONObject(); batch.put("operation", "upload"); JSONArray transfers = new JSONArray(); transfers.put("basic"); batch.put("transfers", transfers); batch.put("objects", objs);
@@ -215,7 +215,7 @@ public class GitSyncEngine {
                 lfsActionRequest("POST", verify.getString("href"), verify.optJSONObject("header"), "application/vnd.git-lfs+json", verifyBody.toString(), p.token);
             }
         } else if (cb != null) cb.progress("Git LFS object already exists; committing pointer...");
-        String pointer = "version https://git-lfs.github.com/spec/v1\n" + "oid sha256:" + oid + "\n" + "size " + size + "\n";
+        String pointer = "version " + GitServerConfig.LFS_SPEC_URL + "\n" + "oid sha256:" + oid + "\n" + "size " + size + "\n";
         JSONObject body = new JSONObject(); body.put("message", "Sync " + rel + " from Android (Git LFS)");
         body.put("content", Base64.encodeToString(pointer.getBytes("UTF-8"), Base64.NO_WRAP)); body.put("branch", safeBranch(p.branch));
         if (existingSha != null && existingSha.length() > 0) body.put("sha", existingSha);
@@ -258,7 +258,7 @@ public class GitSyncEngine {
         if (callbackHolder.get() != null) callbackHolder.get().progress("Local scan complete: " + local.size() + " file(s)");
         int uploaded = uploadFolder(c, p, id, root, root, "");
         String branch = safeBranch(p.branch);
-        String treeUrl = "https://api.github.com/repos/" + enc(id.owner) + "/" + enc(id.repo) + "/git/trees/" + enc(branch) + "?recursive=1";
+        String treeUrl = GitServerConfig.treeUrl(id.owner, id.repo, branch);
         JSONArray items = new JSONObject(request("GET", treeUrl, p.token, null, null)).getJSONArray("tree");
         int deleted = 0; int i;
         for (i = 0; i < items.length(); i++) { checkCancelled();
@@ -275,7 +275,7 @@ public class GitSyncEngine {
 
     private static int[] mirrorRemoteFolder(Context c, RepoProfile p, RepoId id, Uri root) throws Exception {
         String branch = safeBranch(p.branch);
-        String treeUrl = "https://api.github.com/repos/" + enc(id.owner) + "/" + enc(id.repo) + "/git/trees/" + enc(branch) + "?recursive=1";
+        String treeUrl = GitServerConfig.treeUrl(id.owner, id.repo, branch);
         JSONArray items = new JSONObject(request("GET", treeUrl, p.token, null, null)).getJSONArray("tree");
         HashSet<String> remote = new HashSet<String>();
         int downloaded = 0; int i;
@@ -325,7 +325,7 @@ public class GitSyncEngine {
     }
 
     private static void deleteRemoteFile(RepoProfile p, RepoId id, String rel, String sha) throws Exception {
-        String api = "https://api.github.com/repos/" + enc(id.owner) + "/" + enc(id.repo) + "/contents/" + encodePath(rel);
+        String api = GitServerConfig.contentsUrl(id.owner, id.repo, rel);
         JSONObject body = new JSONObject(); body.put("message", "Mirror delete " + rel + " from Android"); body.put("sha", sha); body.put("branch", safeBranch(p.branch));
         request("DELETE", api, p.token, "application/json; charset=UTF-8", body.toString());
     }
@@ -366,7 +366,7 @@ public class GitSyncEngine {
     private static String enc(String s) throws Exception { return URLEncoder.encode(s, "UTF-8").replace("+", "%20"); }
     private static String encodePath(String path) throws Exception { String[] parts = path.split("/"); StringBuilder b = new StringBuilder(); int i; for (i = 0; i < parts.length; i++) { if (i > 0) b.append('/'); b.append(enc(parts[i])); } return b.toString(); }
     private static String safeBranch(String b) { return b == null || b.trim().length() == 0 ? "main" : b.trim(); }
-    private static RepoId parseRepo(String u) { if (u == null) return null; String s = u.trim(); String prefix = "https://github.com/"; if (!s.startsWith(prefix)) return null; s = s.substring(prefix.length()); if (s.endsWith(".git")) s = s.substring(0, s.length() - 4); while (s.endsWith("/")) s = s.substring(0, s.length() - 1); String[] a = s.split("/"); if (a.length != 2 || a[0].length() == 0 || a[1].length() == 0) return null; return new RepoId(a[0], a[1]); }
+    private static RepoId parseRepo(String u) { String[] a = GitServerConfig.parseRepositoryUrl(u); return a == null ? null : new RepoId(a[0], a[1]); }
     private static class RepoId { String owner; String repo; RepoId(String owner, String repo) { this.owner = owner; this.repo = repo; } }
     private static class HttpError extends Exception { int code; HttpError(int code, String message) { super(message); this.code = code; } }
 }
