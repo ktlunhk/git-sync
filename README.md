@@ -90,3 +90,8 @@ GitHub endpoint construction is centralized in `GitServerConfig.java`. To adapt 
 - Remaining user-facing Git-server wording now uses `GitServerConfig.SERVER_NAME` in the main sync/auth flows, making future server changes less misleading.
 - Sync Preview now shows file-level Upload, Download, and Conflict sections (up to 20 paths per section) in addition to the counts.
 - Repository profile load/serialization exceptions are now written to Logcat instead of being silently swallowed.
+
+
+## v1.40
+- Removed the Clear button from the OAuth Settings dialog.
+- OAuth Save and Cancel behavior remains unchanged.
