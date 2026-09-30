@@ -31,7 +31,7 @@ public class GitHubAuth {
         String clientId = clientId(c); String redirect = redirectUri(c);
         String state = randomUrlSafe(32); String verifier = randomUrlSafe(64); String challenge = sha256UrlSafe(verifier);
         c.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit().putString("oauth_state", state).putString("pkce_verifier", verifier).apply();
-        return "https://github.com/login/oauth/authorize?client_id=" + enc(clientId) + "&redirect_uri=" + enc(redirect) + "&scope=" + enc("repo user:email") + "&state=" + enc(state) + "&code_challenge=" + enc(challenge) + "&code_challenge_method=S256&prompt=select_account";
+        return GitServerConfig.oauthAuthorizeUrl() + "?client_id=" + enc(clientId) + "&redirect_uri=" + enc(redirect) + "&scope=" + enc("repo user:email") + "&state=" + enc(state) + "&code_challenge=" + enc(challenge) + "&code_challenge_method=S256&prompt=select_account";
     }
 
     public static void exchangeCode(final Context c, final String code, final String returnedState, final AuthCallback cb) {
@@ -39,7 +39,7 @@ public class GitHubAuth {
             SharedPreferences p = c.getSharedPreferences(PREF, Context.MODE_PRIVATE); String expected = p.getString("oauth_state", ""); String verifier = p.getString("pkce_verifier", "");
             if (expected.length() == 0 || returnedState == null || !expected.equals(returnedState)) throw new Exception("OAuth state validation failed. Please sign in again.");
             String id = clientId(c); String secret = clientSecret(c); String redirect = redirectUri(c); String body = "client_id=" + enc(id) + "&client_secret=" + enc(secret) + "&code=" + enc(code) + "&redirect_uri=" + enc(redirect) + "&code_verifier=" + enc(verifier);
-            JSONObject result = post("https://github.com/login/oauth/access_token", body); String token = result.optString("access_token", "");
+            JSONObject result = post(GitServerConfig.oauthAccessTokenUrl(), body); String token = result.optString("access_token", "");
             if (token.length() == 0) throw new Exception(errorMessage(result, "GitHub did not return an access token."));
             p.edit().putString("token", token).remove("oauth_state").remove("pkce_verifier").apply(); cb.done(true, "Signed in to GitHub");
         } catch (Exception e) { cb.done(false, e.getMessage() == null ? e.toString() : e.getMessage()); } }}).start();
