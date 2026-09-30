@@ -106,3 +106,31 @@ GitHub endpoint construction is centralized in `GitServerConfig.java`. To adapt 
 - Fixed STOP cancellation state persisting into later Sync Preview/Sync operations.
 - STOP now uses operation generations: it cancels operations already running when STOP is pressed, while new operations can start normally afterward.
 - Preserves safe behavior for concurrent Sync All operations.
+
+## v1.43
+- Fixed Sync All opening multiple Sync Preview dialogs at the same time.
+- Sync All now processes repositories sequentially and displays only one preview popup at a time.
+- Added SKIP to advance to the next repository without syncing it.
+- STOP cancels the current operation and stops the remaining Sync All queue.
+- Individual repository Sync behavior is unchanged.
+
+## v1.44
+- Moved STOP from the Sync Log header into a modal operation-progress popup.
+- The progress popup appears only after a sync/download/upload/mirror operation starts.
+- Progress messages are reflected in the popup while the full log remains available on the main screen.
+- STOP cancels the active operation; during Sync All it also cancels the remaining queue.
+- STOP changes to STOPPING... and is disabled after being pressed to prevent repeated cancellation requests.
+- The operation popup is draggable by its title, consistent with other app dialogs.
+
+## v1.45
+- Repository transfer actions now open the progress/STOP popup immediately when checking begins.
+- Sync and Sync All show `Checking...` during preview preparation, then transition to the preview confirmation.
+- Download, Upload, and both Mirror directions show the progress popup from the beginning of their operation.
+- Preview failures correctly close the checking popup; missing-repository handling continues in the same progress popup.
+
+## v1.46 - Stop Entire Sync Workflow
+- STOP during the initial Sync "Checking..." stage now cancels the complete Sync workflow.
+- A cancelled check can no longer open Sync Preview afterward.
+- A cancelled workflow can no longer start upload/download/finalization stages from a queued callback.
+- Added UI workflow-generation guarding in addition to the engine cancellation generation.
+- Sync All uses the same guard, and cancellation callbacks now correctly release the active-operation/progress popup state.
