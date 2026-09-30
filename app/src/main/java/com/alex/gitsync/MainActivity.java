@@ -39,6 +39,8 @@ public class MainActivity extends Activity {
     private EditText pendingFolderTarget;
     private static final int REQUEST_FOLDER = 4101;
     private HashMap<String,String> repoStatus = new HashMap<String,String>();
+    private AlertDialog operationDialog;
+    private TextView operationDialogMessage;
 
     public void onCreate(Bundle b) {
         super.onCreate(b); setContentView(R.layout.activity_main); applySystemBarInsets();
@@ -48,14 +50,12 @@ public class MainActivity extends Activity {
         setButtonIconText((Button)findViewById(R.id.settingsButton), R.drawable.ic_action_settings, "OAUTH SETTINGS");
         setButtonIconText((Button)findViewById(R.id.addButton), R.drawable.ic_action_add, "ADD REPOSITORY");
         setButtonIconText((Button)findViewById(R.id.syncAllButton), R.drawable.ic_action_sync, "SYNC ALL");
-        setButtonIconText((Button)findViewById(R.id.stopButton), R.drawable.ic_action_stop, "STOP");
         setButtonIconText((Button)findViewById(R.id.clearLogButton), R.drawable.ic_action_clear, "CLEAR");
         ((Button)findViewById(R.id.settingsButton)).setOnClickListener(new View.OnClickListener() { public void onClick(View v) { showOAuthSettings(); } });
         ((Button)findViewById(R.id.loginButton)).setOnClickListener(new View.OnClickListener() { public void onClick(View v) { loginOrLogout(); } });
         ((Button)findViewById(R.id.addButton)).setOnClickListener(new View.OnClickListener() { public void onClick(View v) { showEditor(-1); } });
         ((Button)findViewById(R.id.syncAllButton)).setOnClickListener(new View.OnClickListener() { public void onClick(View v) { syncAll(); } });
         ((Button)findViewById(R.id.clearLogButton)).setOnClickListener(new View.OnClickListener() { public void onClick(View v) { status.setText(""); } });
-        ((Button)findViewById(R.id.stopButton)).setOnClickListener(new View.OnClickListener() { public void onClick(View v) { GitSyncEngine.cancel(); showProgress("Stopping after the current safe operation..."); } });
         ListView lv = (ListView)findViewById(R.id.repoList);
         lv.setOnItemClickListener(new AdapterView.OnItemClickListener() { public void onItemClick(AdapterView<?> p, View v, int pos, long id) { showActions(pos); } });
     }
@@ -285,13 +285,13 @@ public class MainActivity extends Activity {
 
     private void mirrorRemoteOne(final RepoProfile r) {
         if (!prepareAuth(r)) return;
-        beginWork(); status.setText("Mirroring " + r.name + " from " + GitServerConfig.SERVER_NAME + " to local folder...");
+        beginWork("Checking " + r.name + " for mirror..."); status.setText("Mirroring " + r.name + " from " + GitServerConfig.SERVER_NAME + " to local folder...");
         GitSyncEngine.mirrorRemoteToLocal(MainActivity.this, r, creationCallback(r));
     }
 
     private void mirrorOne(final RepoProfile r) {
         if (!prepareAuth(r)) return;
-        beginWork(); status.setText("Mirroring " + r.name + " from local folder to " + GitServerConfig.SERVER_NAME + "...");
+        beginWork("Checking " + r.name + " for mirror..."); status.setText("Mirroring " + r.name + " from local folder to " + GitServerConfig.SERVER_NAME + "...");
         GitSyncEngine.mirrorLocalToRemote(MainActivity.this, r, creationCallback(r));
     }
 
@@ -330,20 +330,77 @@ public class MainActivity extends Activity {
     private TextView dialogLabel(String text) { TextView v = new TextView(this); v.setText(text); v.setTextColor(0xFF455A64); v.setTextSize(13); v.setPadding(2, 10, 2, 4); return v; }
     private void styleDialogField(EditText e) { e.setBackgroundResource(R.drawable.bg_input); e.setPadding(12, 8, 12, 8); }
     private int activeOperations = 0;
+    private boolean syncAllRunning = false;
+    private int syncAllIndex = 0;
+    // Identifies the currently valid Sync/Sync All workflow. STOP invalidates it so
+    // callbacks from the checking/preview stage cannot start later stages.
+    private int syncWorkflowGeneration = 0;
+    private int syncAllWorkflowGeneration = 0;
     private synchronized void beginWork() {
+        beginWork("Checking...");
+    }
+    private synchronized void beginWork(String initialMessage) {
         activeOperations++;
-        updateStopButton();
+        showOperationDialog(initialMessage == null ? "Checking..." : initialMessage);
     }
     private synchronized void endWork() {
         if (activeOperations > 0) activeOperations--;
-        updateStopButton();
+        if (activeOperations == 0) dismissOperationDialog();
     }
-    private void updateStopButton() {
-        final boolean working = activeOperations > 0;
+
+    private void showOperationDialog(final String message) {
         runOnUiThread(new Runnable() { public void run() {
-            Button b = (Button)findViewById(R.id.stopButton);
-            if (b != null) b.setVisibility(working ? View.VISIBLE : View.GONE);
-        } });
+            if (operationDialog != null && operationDialog.isShowing()) {
+                updateOperationDialog(message);
+                return;
+            }
+            operationDialogMessage = new TextView(MainActivity.this);
+            operationDialogMessage.setText(message);
+            operationDialogMessage.setTextSize(14);
+            operationDialogMessage.setTextColor(0xFF37474F);
+            operationDialogMessage.setPadding(dp(24), dp(14), dp(24), dp(10));
+            operationDialog = new AlertDialog.Builder(MainActivity.this)
+                .setTitle("Sync in progress")
+                .setView(operationDialogMessage)
+                .setNegativeButton("STOP", null)
+                .create();
+            operationDialog.setCancelable(false);
+            operationDialog.setOnShowListener(new DialogInterface.OnShowListener() { public void onShow(DialogInterface d) {
+                polishDialog(operationDialog);
+                final Button stop = operationDialog.getButton(AlertDialog.BUTTON_NEGATIVE);
+                if (stop != null) {
+                    stop.setTextColor(0xFFC62828);
+                    stop.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
+                        GitSyncEngine.cancel();
+                        // Cancel the whole UI workflow too, not just the engine thread.
+                        // This prevents a completed/queued preview callback from opening
+                        // the preview or starting a transfer after STOP was pressed.
+                        syncWorkflowGeneration++;
+                        syncAllRunning = false;
+                        stop.setEnabled(false);
+                        stop.setText("STOPPING...");
+                        updateOperationDialog("Stopping after the current safe operation...");
+                        showProgress("Stopping after the current safe operation...");
+                    }});
+                }
+            }});
+            operationDialog.show();
+        }});
+    }
+
+    private void updateOperationDialog(final String message) {
+        runOnUiThread(new Runnable() { public void run() {
+            if (operationDialogMessage != null && operationDialog != null && operationDialog.isShowing())
+                operationDialogMessage.setText(message == null ? "Working..." : message);
+        }});
+    }
+
+    private void dismissOperationDialog() {
+        runOnUiThread(new Runnable() { public void run() {
+            if (operationDialog != null) { try { operationDialog.dismiss(); } catch (Exception e) { } }
+            operationDialog = null;
+            operationDialogMessage = null;
+        }});
     }
 
     private void showOAuthSettings() {
@@ -422,7 +479,7 @@ public class MainActivity extends Activity {
 
     private GitSyncEngine.CreationCallback creationCallback(final RepoProfile repo) {
         return new GitSyncEngine.CreationCallback() {
-            public void progress(final String m) { updateRepoStatus(repo, m); showProgress(m); }
+            public void progress(final String m) { updateRepoStatus(repo, m); showProgress(m); updateOperationDialog(m); }
             public boolean confirmCreateRepository(String owner, String repository) { return askCreateRepository(owner, repository); }
             public void done(final String m) { updateRepoStatus(repo, m.startsWith("ERROR") ? "Failed - tap to retry" : "Synced just now"); runOnUiThread(new Runnable() { public void run() { endWork(); showProgress(m); Toast.makeText(MainActivity.this, m, Toast.LENGTH_LONG).show(); } }); }
         };
@@ -430,21 +487,39 @@ public class MainActivity extends Activity {
 
     private void syncOne(final RepoProfile r) {
         if (!prepareAuth(r)) return;
+        final int workflow = ++syncWorkflowGeneration;
+        beginWork("Checking " + r.name + "...");
         updateRepoStatus(r,"Checking changes..."); showProgress("Previewing " + r.name + "...");
         GitSyncEngine.previewSync(MainActivity.this,r,new GitSyncEngine.PreviewCallback(){
-            public void ready(final GitSyncEngine.SyncPreview x){ runOnUiThread(new Runnable(){public void run(){ showSyncPreview(r,x); }}); }
-            public void error(final String m){ runOnUiThread(new Runnable(){public void run(){ if(m!=null && m.indexOf("404")>=0){ showProgress("Repository not found; checking creation option..."); beginWork(); GitSyncEngine.sync(MainActivity.this,r,creationCallback(r)); } else { updateRepoStatus(r,"Preview failed"); showProgress("ERROR " + r.name + ": " + m); } }}); }
+            public void ready(final GitSyncEngine.SyncPreview x){ runOnUiThread(new Runnable(){public void run(){
+                endWork();
+                if (workflow != syncWorkflowGeneration) {
+                    updateRepoStatus(r, "Stopped by user");
+                    showProgress("Sync stopped by user: " + r.name);
+                    return;
+                }
+                showSyncPreview(r,x,workflow);
+            }}); }
+            public void error(final String m){ runOnUiThread(new Runnable(){public void run(){
+                if (workflow != syncWorkflowGeneration) {
+                    endWork();
+                    updateRepoStatus(r, "Stopped by user");
+                    showProgress("Sync stopped by user: " + r.name);
+                    return;
+                }
+                if(m!=null && m.indexOf("404")>=0){ showProgress("Repository not found; checking creation option..."); updateOperationDialog("Repository not found. Checking creation option..."); GitSyncEngine.sync(MainActivity.this,r,creationCallback(r)); } else { endWork(); updateRepoStatus(r,"Preview failed"); showProgress("ERROR " + r.name + ": " + m); }
+            }}); }
         });
     }
 
-    private void showSyncPreview(final RepoProfile r, GitSyncEngine.SyncPreview x) {
+    private void showSyncPreview(final RepoProfile r, GitSyncEngine.SyncPreview x, final int workflow) {
         StringBuilder b=new StringBuilder(); b.append(x.summary());
         appendPreviewSection(b, "UPLOAD", x.uploads);
         appendPreviewSection(b, "DOWNLOAD", x.downloads);
         appendPreviewSection(b, "CONFLICT — skipped", x.conflicts);
         if(x.conflict>0) b.append("\n\nConflicts are protected. Use Upload or Download from the repository actions to choose which copy should win.");
         b.append("\n\nOnly local-only files will upload and " + GitServerConfig.SERVER_NAME + "-only files will download.");
-        final AlertDialog d=new AlertDialog.Builder(this).setTitle("Sync Preview — " + r.name).setMessage(b.toString()).setNegativeButton("CANCEL",null).setPositiveButton("SYNC",new DialogInterface.OnClickListener(){public void onClick(DialogInterface q,int w){ beginWork(); updateRepoStatus(r,"Syncing..."); GitSyncEngine.sync(MainActivity.this,r,creationCallback(r)); }}).create();
+        final AlertDialog d=new AlertDialog.Builder(this).setTitle("Sync Preview — " + r.name).setMessage(b.toString()).setNegativeButton("CANCEL",null).setPositiveButton("SYNC",new DialogInterface.OnClickListener(){public void onClick(DialogInterface q,int w){ if (workflow != syncWorkflowGeneration) return; beginWork("Starting sync for " + r.name + "..."); updateRepoStatus(r,"Syncing..."); GitSyncEngine.sync(MainActivity.this,r,creationCallback(r)); }}).create();
         d.setOnShowListener(new DialogInterface.OnShowListener(){public void onShow(DialogInterface q){polishDialog(d);}}); d.show();
     }
 
@@ -458,15 +533,98 @@ public class MainActivity extends Activity {
 
     private void downloadOne(final RepoProfile r) {
         if (!prepareAuth(r)) return;
-        beginWork(); status.setText("Downloading " + r.name + "...");
+        beginWork("Checking " + r.name + " for download..."); status.setText("Downloading " + r.name + "...");
         GitSyncEngine.download(MainActivity.this, r, creationCallback(r));
     }
 
     private void uploadOne(final RepoProfile r) {
         if (!prepareAuth(r)) return;
-        beginWork(); status.setText("Uploading " + r.name + "...");
+        beginWork("Checking " + r.name + " for upload..."); status.setText("Uploading " + r.name + "...");
         GitSyncEngine.upload(MainActivity.this, r, creationCallback(r));
     }
 
-    private void syncAll() { int i; for (i = 0; i < repos.size(); i++) syncOne(repos.get(i)); }
+    private void syncAll() {
+        if (syncAllRunning) { Toast.makeText(this, "Sync All is already running.", Toast.LENGTH_SHORT).show(); return; }
+        if (repos.size() == 0) { Toast.makeText(this, "No repositories to sync.", Toast.LENGTH_SHORT).show(); return; }
+        syncAllRunning = true;
+        syncAllIndex = 0;
+        syncAllWorkflowGeneration = ++syncWorkflowGeneration;
+        showProgress("Sync All started. Repositories will be processed one at a time.");
+        syncAllNext();
+    }
+
+    private void syncAllNext() {
+        if (!syncAllRunning || syncAllWorkflowGeneration != syncWorkflowGeneration) return;
+        if (syncAllIndex >= repos.size()) {
+            syncAllRunning = false;
+            showProgress("Sync All finished.");
+            Toast.makeText(this, "Sync All finished.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final RepoProfile r = repos.get(syncAllIndex++);
+        if (!prepareAuth(r)) { syncAllRunning = false; return; }
+        beginWork("Checking " + r.name + " (" + syncAllIndex + "/" + repos.size() + ")...");
+        updateRepoStatus(r, "Checking changes...");
+        showProgress("Previewing " + r.name + " (" + syncAllIndex + "/" + repos.size() + ")...");
+        GitSyncEngine.previewSync(MainActivity.this, r, new GitSyncEngine.PreviewCallback() {
+            public void ready(final GitSyncEngine.SyncPreview x) { runOnUiThread(new Runnable() { public void run() {
+                endWork();
+                if (!syncAllRunning || syncAllWorkflowGeneration != syncWorkflowGeneration) {
+                    updateRepoStatus(r, "Stopped by user");
+                    return;
+                }
+                showSyncAllPreview(r, x);
+            }}); }
+            public void error(final String m) { runOnUiThread(new Runnable() { public void run() {
+                if (!syncAllRunning || syncAllWorkflowGeneration != syncWorkflowGeneration) {
+                    endWork();
+                    updateRepoStatus(r, "Stopped by user");
+                    return;
+                }
+                if (m != null && m.indexOf("404") >= 0) {
+                    updateOperationDialog("Repository not found. Checking creation option...");
+                    GitSyncEngine.sync(MainActivity.this, r, syncAllCreationCallback(r));
+                } else {
+                    endWork();
+                    updateRepoStatus(r, "Preview failed");
+                    showProgress("ERROR " + r.name + ": " + m);
+                    syncAllNext();
+                }
+            }}); }
+        });
+    }
+
+    private void showSyncAllPreview(final RepoProfile r, GitSyncEngine.SyncPreview x) {
+        if (!syncAllRunning || syncAllWorkflowGeneration != syncWorkflowGeneration) return;
+        StringBuilder b = new StringBuilder(); b.append(x.summary());
+        appendPreviewSection(b, "UPLOAD", x.uploads);
+        appendPreviewSection(b, "DOWNLOAD", x.downloads);
+        appendPreviewSection(b, "CONFLICT — skipped", x.conflicts);
+        if (x.conflict > 0) b.append("\n\nConflicts are protected. Use Upload or Download from the repository actions to choose which copy should win.");
+        b.append("\n\nRepository ").append(syncAllIndex).append(" of ").append(repos.size()).append(". Only one Sync All popup is shown at a time.");
+        final AlertDialog d = new AlertDialog.Builder(this).setTitle("Sync All Preview — " + r.name).setMessage(b.toString())
+            .setNegativeButton("SKIP", new DialogInterface.OnClickListener() { public void onClick(DialogInterface q, int w) { updateRepoStatus(r, "Skipped"); syncAllNext(); } })
+            .setPositiveButton("SYNC", new DialogInterface.OnClickListener() { public void onClick(DialogInterface q, int w) {
+                if (!syncAllRunning || syncAllWorkflowGeneration != syncWorkflowGeneration) return;
+                beginWork("Starting sync for " + r.name + "..."); updateRepoStatus(r, "Syncing...");
+                GitSyncEngine.sync(MainActivity.this, r, syncAllCreationCallback(r));
+            }}).create();
+        d.setOnCancelListener(new DialogInterface.OnCancelListener() { public void onCancel(DialogInterface q) { if (syncAllRunning) syncAllNext(); }});
+        d.setOnShowListener(new DialogInterface.OnShowListener() { public void onShow(DialogInterface q) { polishDialog(d); }});
+        d.show();
+    }
+
+    private GitSyncEngine.CreationCallback syncAllCreationCallback(final RepoProfile repo) {
+        return new GitSyncEngine.CreationCallback() {
+            public void progress(final String m) { updateRepoStatus(repo, m); showProgress(m); updateOperationDialog(m); }
+            public boolean confirmCreateRepository(String owner, String repository) { return askCreateRepository(owner, repository); }
+            public void done(final String m) {
+                updateRepoStatus(repo, m.startsWith("ERROR") ? "Failed - tap to retry" : "Synced just now");
+                runOnUiThread(new Runnable() { public void run() {
+                    endWork(); showProgress(m);
+                    if (syncAllRunning) syncAllNext();
+                }});
+            }
+        };
+    }
 }
