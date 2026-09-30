@@ -82,3 +82,11 @@ GitHub authorization is opened as a Chrome Custom Tab when Chrome is available, 
 
 ## v1.38 Git server configuration
 GitHub endpoint construction is centralized in `GitServerConfig.java`. To adapt the app to GitHub Enterprise or another GitHub-compatible server, start by changing `WEB_BASE_URL`, `API_BASE_URL`, OAuth URL construction, and (if required) LFS URL construction in that class. Sync/auth/UI code no longer contains hard-coded GitHub endpoint paths.
+
+## v1.39 reliability and portability changes
+- Added Git LFS download support: LFS pointer blobs are detected and the real large object is streamed to SAF storage for Download, two-way Sync, and Mirror server-to-local.
+- LFS download reports progress, honors STOP/cancellation, validates the downloaded byte count, and avoids buffering the large object in memory.
+- Repository profiles no longer persist OAuth access tokens. Authentication is injected at runtime from the central OAuth session.
+- Remaining user-facing Git-server wording now uses `GitServerConfig.SERVER_NAME` in the main sync/auth flows, making future server changes less misleading.
+- Sync Preview now shows file-level Upload, Download, and Conflict sections (up to 20 paths per section) in addition to the counts.
+- Repository profile load/serialization exceptions are now written to Logcat instead of being silently swallowed.
