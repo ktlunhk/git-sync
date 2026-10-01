@@ -112,7 +112,11 @@ public class GitSyncEngine {
         for (Map.Entry<String,Uri> e : localUris.entrySet()) {
             String path=e.getKey(); String rs=remote.get(path);
             if (rs==null) { x.upload++; x.uploads.add(path); }
-            else if (getFileSize(c,e.getValue()) >= 50L*1024L*1024L) { x.conflict++; x.conflicts.add(path + " (large/LFS - verify direction)"); }
+            else if (getFileSize(c,e.getValue()) >= 50L*1024L*1024L) {
+                LfsPointer lp = remoteLfsPointer(p, id, rs);
+                if (lp != null && lp.size == getFileSize(c, e.getValue()) && lp.oid.equalsIgnoreCase(sha256(c, e.getValue(), path))) x.unchanged++;
+                else { x.conflict++; x.conflicts.add(path + (lp == null ? " (remote is not Git LFS)" : " (Git LFS content differs)")); }
+            }
             else if (rs.equals(localShas.get(path))) x.unchanged++;
             else { x.conflict++; x.conflicts.add(path); }
         }
@@ -127,7 +131,11 @@ public class GitSyncEngine {
         for(String path:remote.keySet()) if(!localUris.containsKey(path)) { downloadPath(c,p,id,root,path,remote.get(path)); down++; }
         for(Map.Entry<String,Uri> e:localUris.entrySet()) { checkCancelled(); String path=e.getKey(); String rs=remote.get(path);
             if(rs==null) { uploadFileWithRetry(c,p,id,e.getValue(),path); up++; }
-            else if(getFileSize(c,e.getValue()) >= 50L*1024L*1024L || !rs.equals(localShas.get(path))) {
+            else if(getFileSize(c,e.getValue()) >= 50L*1024L*1024L) {
+                LfsPointer lp = remoteLfsPointer(p, id, rs);
+                boolean same = lp != null && lp.size == getFileSize(c, e.getValue()) && lp.oid.equalsIgnoreCase(sha256(c, e.getValue(), path));
+                if(!same && callbackHolder.get()!=null) callbackHolder.get().progress("CONFLICT skipped: " + path + " (use Upload or Download to choose a side)");
+            } else if(!rs.equals(localShas.get(path))) {
                 if(callbackHolder.get()!=null) callbackHolder.get().progress("CONFLICT skipped: " + path + " (use Upload or Download to choose a side)");
             }
         }
@@ -146,6 +154,29 @@ public class GitSyncEngine {
     }
 
     private static String gitBlobSha(Context c, Uri file) throws Exception { long size=getFileSize(c,file); MessageDigest md=MessageDigest.getInstance("SHA-1"); md.update(("blob "+size+"\0").getBytes("UTF-8")); InputStream in=c.getContentResolver().openInputStream(file); byte[] b=new byte[32768]; int n; while((n=in.read(b))>0)md.update(b,0,n); in.close(); byte[] d=md.digest(); StringBuilder x=new StringBuilder(); for(byte q:d)x.append(String.format("%02x",q&255)); return x.toString(); }
+
+    private static class LfsPointer {
+        String oid; long size;
+        LfsPointer(String oid, long size) { this.oid = oid; this.size = size; }
+    }
+
+    private static LfsPointer remoteLfsPointer(RepoProfile p, RepoId id, String blobSha) throws Exception {
+        checkCancelled();
+        JSONObject blob = new JSONObject(request("GET", GitServerConfig.blobUrl(id.owner, id.repo, blobSha), p.token, null, null));
+        byte[] data = Base64.decode(blob.optString("content").replace("\n", "").replace("\r", ""), Base64.DEFAULT);
+        if (data.length < 40 || data.length > 4096) return null;
+        String pointer = new String(data, "UTF-8");
+        if (!pointer.startsWith("version " + GitServerConfig.LFS_SPEC_URL)) return null;
+        String oid = null; long size = -1L;
+        String[] lines = pointer.split("\n");
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i].trim();
+            if (line.startsWith("oid sha256:")) oid = line.substring(11).trim();
+            else if (line.startsWith("size ")) try { size = Long.parseLong(line.substring(5).trim()); } catch (Exception ignored) { }
+        }
+        if (oid == null || oid.length() != 64 || size < 0) return null;
+        return new LfsPointer(oid, size);
+    }
 
     private static void downloadPath(Context c, RepoProfile p, RepoId id, Uri root, String path, String sha) throws Exception {
         if (callbackHolder.get() != null) callbackHolder.get().progress("Downloading: " + path);
