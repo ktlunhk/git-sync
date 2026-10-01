@@ -46,6 +46,21 @@ public final class GitServerConfig {
         return WEB_BASE_URL + "/" + enc(owner) + "/" + enc(repo) + ".git/info/lfs";
     }
 
+
+    /** Canonical owner/repository identity used for duplicate and operation checks. */
+    public static String repositoryKey(String value) {
+        String[] a = parseRepositoryUrl(value);
+        if (a == null) return null;
+        return a[0].trim().toLowerCase(java.util.Locale.US) + "/" + a[1].trim().toLowerCase(java.util.Locale.US);
+    }
+
+    /** Normalized URL suitable for storing after validation. */
+    public static String normalizeRepositoryUrl(String value) {
+        String[] a = parseRepositoryUrl(value);
+        if (a == null) return value == null ? "" : value.trim();
+        return WEB_BASE_URL + "/" + a[0] + "/" + a[1] + ".git";
+    }
+
     public static String[] parseRepositoryUrl(String value) {
         if (value == null) return null;
         String s = value.trim();
