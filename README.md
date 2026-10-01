@@ -134,3 +134,18 @@ GitHub endpoint construction is centralized in `GitServerConfig.java`. To adapt 
 - A cancelled workflow can no longer start upload/download/finalization stages from a queued callback.
 - Added UI workflow-generation guarding in addition to the engine cancellation generation.
 - Sync All uses the same guard, and cancellation callbacks now correctly release the active-operation/progress popup state.
+
+## v1.47 - Git LFS-aware Sync Comparison
+- Fixed large Git LFS files being reported as conflicts merely because they are >= 50 MiB.
+- Sync Preview now reads the remote LFS pointer and compares its SHA-256 OID and size with the actual local file.
+- Matching LFS files are reported as Unchanged.
+- Differing LFS content remains protected as a conflict; a large local file whose remote blob is not LFS is also protected as a conflict.
+- Protected two-way Sync uses the same LFS-aware comparison, so an unchanged large file is skipped normally.
+
+## v1.48 - Foreground Sync Service
+- Sync, Upload, Download and both Mirror operations are now launched and owned by `GitSyncService`.
+- Sync Preview/checking also runs through the service, so the foreground operation begins at the checking stage.
+- The service uses Android's `dataSync` foreground-service type and a low-priority ongoing notification while work is active.
+- STOP now cancels the engine through the service entry point.
+- Existing v1.47 synchronization/LFS decision rules are unchanged.
+- This release intentionally does not add three-way sync or alter conflict rules.
