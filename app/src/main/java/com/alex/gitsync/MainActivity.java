@@ -29,6 +29,8 @@ import android.widget.*;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Collections;
+import java.util.Comparator;
 
 public class MainActivity extends Activity {
     private ArrayList<RepoProfile> repos;
@@ -41,12 +43,34 @@ public class MainActivity extends Activity {
     private HashMap<String,String> repoStatus = new HashMap<String,String>();
     private AlertDialog operationDialog;
     private TextView operationDialogMessage;
+    private boolean sortAscending = true;
+
+    private void sortRepos() {
+        Collections.sort(repos, new Comparator<RepoProfile>() {
+            public int compare(RepoProfile a, RepoProfile b) {
+                int c = String.CASE_INSENSITIVE_ORDER.compare(a.name == null ? "" : a.name, b.name == null ? "" : b.name);
+                return sortAscending ? c : -c;
+            }
+        });
+    }
+
+    private void updateSortButton() {
+        Button sb = (Button)findViewById(R.id.sortButton);
+        if (sb != null) sb.setText(sortAscending ? "Name A\u2192Z" : "Name Z\u2192A");
+    }
 
     public void onCreate(Bundle b) {
         super.onCreate(b); setContentView(R.layout.activity_main); applySystemBarInsets();
         status = (TextView)findViewById(R.id.statusText);
         logScroll = (ScrollView)findViewById(R.id.logScroll);
-        repos = RepoStore.load(this); refresh(); updateAuthUi();
+        sortAscending = getSharedPreferences("ui", MODE_PRIVATE).getBoolean("sortAscending", true);
+        repos = RepoStore.load(this); refresh(); updateAuthUi(); updateSortButton();
+        ((Button)findViewById(R.id.sortButton)).setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
+            if (syncAllRunning) { Toast.makeText(MainActivity.this,"Sync All is running. Sorting is unavailable until it finishes.",Toast.LENGTH_SHORT).show(); return; }
+            sortAscending = !sortAscending;
+            getSharedPreferences("ui", MODE_PRIVATE).edit().putBoolean("sortAscending", sortAscending).apply();
+            updateSortButton(); refresh();
+        } });
         setButtonIconText((Button)findViewById(R.id.settingsButton), R.drawable.ic_action_settings, "OAUTH SETTINGS");
         setButtonIconText((Button)findViewById(R.id.addButton), R.drawable.ic_action_add, "ADD REPOSITORY");
         setButtonIconText((Button)findViewById(R.id.syncAllButton), R.drawable.ic_action_sync, "SYNC ALL");
@@ -147,6 +171,7 @@ public class MainActivity extends Activity {
             if (firstChild != null) savedTop = firstChild.getTop() - existingList.getPaddingTop();
         }
 
+        if (!syncAllRunning) sortRepos();
         labels = new ArrayList<String>(); int i;
         for (i = 0; i < repos.size(); i++) { RepoProfile r = repos.get(i); String st=repoStatus.get(r.name); labels.add(st==null ? r.name+"\nReady" : r.name+"\n"+st); }
         adapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, labels) {
