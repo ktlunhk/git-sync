@@ -13,3 +13,5 @@ Changes:
 - Git server naming remains derived from `GitServerConfig.SERVER_NAME`.
 
 No changes were made to LFS comparison, transfer rules, conflict rules, or foreground-service synchronization behavior.
+
+≈=======
