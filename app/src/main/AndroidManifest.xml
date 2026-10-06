@@ -3,8 +3,9 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application android:theme="@style/AppTheme" android:label="myGitSync" android:icon="@mipmap/ic_launcher" android:allowBackup="false">
-        <activity android:name=".MainActivity" android:screenOrientation="unspecified" android:exported="true" android:launchMode="singleTask">
+        <activity android:name=".MainActivity" android:screenOrientation="unspecified" android:exported="true" android:launchMode="singleTask" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
