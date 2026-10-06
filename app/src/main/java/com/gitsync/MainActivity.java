@@ -60,10 +60,14 @@ public class MainActivity extends Activity {
     }
 
     public void onCreate(Bundle b) {
-        super.onCreate(b); setContentView(R.layout.activity_main); applySystemBarInsets();
+        super.onCreate(b);
+        // After a recreation getIntent() is the ORIGINAL launch intent; never replay an old OAuth redirect.
+        if (b != null) setIntent(new Intent());
+        setContentView(R.layout.activity_main); applySystemBarInsets();
         status = (TextView)findViewById(R.id.statusText);
         logScroll = (ScrollView)findViewById(R.id.logScroll);
         sortAscending = getSharedPreferences("ui", MODE_PRIVATE).getBoolean("sortAscending", true);
+        requestNotificationPermissionOnce();
         repos = RepoStore.load(this); refresh(); updateAuthUi(); updateSortButton();
         ((Button)findViewById(R.id.sortButton)).setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
             if (syncAllRunning) { Toast.makeText(MainActivity.this,"Sync All is running. Sorting is unavailable until it finishes.",Toast.LENGTH_SHORT).show(); return; }
@@ -475,6 +479,23 @@ public class MainActivity extends Activity {
         startActivity(browser);
     }
 
+    private static final int REQUEST_NOTIFICATIONS = 4102;
+
+    /** Android 13+: without POST_NOTIFICATIONS the sync progress notification is hidden. Ask once. */
+    private void requestNotificationPermissionOnce() {
+        if (android.os.Build.VERSION.SDK_INT < 33) return;
+        if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") == android.content.pm.PackageManager.PERMISSION_GRANTED) return;
+        if (getSharedPreferences("ui", MODE_PRIVATE).getBoolean("notificationPermissionAsked", false)) return;
+        getSharedPreferences("ui", MODE_PRIVATE).edit().putBoolean("notificationPermissionAsked", true).apply();
+        requestPermissions(new String[] { "android.permission.POST_NOTIFICATIONS" }, REQUEST_NOTIFICATIONS);
+    }
+
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_NOTIFICATIONS && (grantResults.length == 0 || grantResults[0] != android.content.pm.PackageManager.PERMISSION_GRANTED))
+            Toast.makeText(this, "Notifications are off: sync progress will not appear in the notification shade.", Toast.LENGTH_LONG).show();
+    }
+
     protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handleOAuthIntent(intent); }
     protected void onResume() { super.onResume(); handleOAuthIntent(getIntent()); }
 
@@ -502,10 +523,12 @@ public class MainActivity extends Activity {
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicBoolean answer = new AtomicBoolean(false);
         runOnUiThread(new Runnable() { public void run() {
+            final CheckBox privateBox = new CheckBox(MainActivity.this); privateBox.setText("Make repository private"); privateBox.setChecked(true); privateBox.setPadding(dp(24), dp(8), dp(24), dp(8));
             final AlertDialog q = new AlertDialog.Builder(MainActivity.this)
                 .setTitle("Repository not found — " + owner + "/" + repository)
-                .setMessage("The " + GitServerConfig.SERVER_NAME + " repository " + owner + "/" + repository + " does not exist or is not accessible.\n\nCreate a new PUBLIC repository with this name and continue the operation?")
-                .setPositiveButton("CREATE REPOSITORY", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { answer.set(true); latch.countDown(); } })
+                .setMessage("The " + GitServerConfig.SERVER_NAME + " repository " + owner + "/" + repository + " does not exist or is not accessible.\n\nCreate a new repository with this name and continue the operation?")
+                .setView(privateBox)
+                .setPositiveButton("CREATE REPOSITORY", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { GitSyncEngine.setCreatePrivate(privateBox.isChecked()); answer.set(true); latch.countDown(); } })
                 .setNegativeButton("CANCEL", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) { answer.set(false); latch.countDown(); } })
                 .setOnCancelListener(new DialogInterface.OnCancelListener() { public void onCancel(DialogInterface d) { answer.set(false); latch.countDown(); } })
                 .create(); q.setOnShowListener(new DialogInterface.OnShowListener(){ public void onShow(DialogInterface d){ polishDialog(q); }}); q.show();
