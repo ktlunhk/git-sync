@@ -34,11 +34,14 @@ public class GitSyncEngine {
     private static final AtomicInteger cancelGeneration = new AtomicInteger(0);
     private static final ThreadLocal<Integer> operationGeneration = new ThreadLocal<Integer>();
     public static void cancel() { cancelGeneration.incrementAndGet(); }
+    // Chosen by the user in the "create repository" dialog. Defaults to private.
+    private static volatile boolean createPrivate = true;
+    public static void setCreatePrivate(boolean value) { createPrivate = value; }
     private static void beginOperation() { operationGeneration.set(Integer.valueOf(cancelGeneration.get())); }
     private static void endOperation() { operationGeneration.remove(); }
     private static void checkCancelled() throws Exception {
         Integer started = operationGeneration.get();
-        if (started != null && started.intValue() != cancelGeneration.get()) throw new Exception("Sync stopped by user");
+        if (started != null && started.intValue() != cancelGeneration.get()) throw new SyncCancelled();
     }
     public interface Callback { void progress(String message); void done(String message); }
     public interface CreationCallback extends Callback { boolean confirmCreateRepository(String owner, String repository); }
@@ -51,6 +54,10 @@ public class GitSyncEngine {
         public String summary() { return "Upload " + upload + "   Download " + download + "   Conflicts " + conflict + "   Unchanged " + unchanged; }
     }
     private static final int MAX_RETRIES = 5;
+    // Rate-limit (HTTP 403/429) waits longer than this abort with a clear message instead of blocking.
+    private static final long MAX_RATE_WAIT_MS = 5L * 60L * 1000L;
+    // Files at least this big are uploaded as a streamed request body (never held in memory).
+    private static final long STREAM_UPLOAD_MIN = 2L * 1024L * 1024L;
     private static final ThreadLocal<Callback> callbackHolder = new ThreadLocal<Callback>();
     public static void download(final Context c, final RepoProfile p, final Callback cb) { runTask(c, p, cb, 0); }
     public static void upload(final Context c, final RepoProfile p, final Callback cb) { runTask(c, p, cb, 1); }
@@ -95,7 +102,7 @@ public class GitSyncEngine {
         String login = user.optString("login", "");
         String createUrl;
         if (login.equalsIgnoreCase(id.owner)) createUrl = GitServerConfig.createUserRepoUrl(); else createUrl = GitServerConfig.createOrgRepoUrl(id.owner);
-        JSONObject body = new JSONObject(); body.put("name", id.repo); body.put("description", "Created by myGitSync"); body.put("private", false); body.put("auto_init", true);
+        JSONObject body = new JSONObject(); body.put("name", id.repo); body.put("description", "Created by myGitSync"); body.put("private", createPrivate); body.put("auto_init", true);
         JSONObject created = new JSONObject(request("POST", createUrl, p.token, "application/json; charset=UTF-8", body.toString()));
         String fullName = created.optString("full_name", id.owner + "/" + id.repo);
         if (cb != null) cb.progress("Created " + GitServerConfig.SERVER_NAME + " repository: " + fullName);
@@ -142,9 +149,17 @@ public class GitSyncEngine {
         return new int[]{down,up};
     }
 
+    // The Git trees API silently truncates huge trees (truncated=true). Acting on a partial
+    // tree is dangerous: mirror modes would treat missing entries as deleted. Abort instead.
+    private static JSONArray fetchTree(RepoProfile p, RepoId id) throws Exception {
+        String treeUrl = GitServerConfig.treeUrl(id.owner, id.repo, safeBranch(p.branch));
+        JSONObject tree = new JSONObject(request("GET", treeUrl, p.token, null, null));
+        if (tree.optBoolean("truncated", false)) throw new Exception(GitServerConfig.SERVER_NAME + " returned a truncated file list for " + id.owner + "/" + id.repo + " (repository too large for one request). Operation aborted to avoid data loss.");
+        return tree.getJSONArray("tree");
+    }
+
     private static HashMap<String,String> remoteShas(RepoProfile p, RepoId id) throws Exception {
-        String treeUrl=GitServerConfig.treeUrl(id.owner,id.repo,safeBranch(p.branch));
-        JSONArray a=new JSONObject(request("GET",treeUrl,p.token,null,null)).getJSONArray("tree"); HashMap<String,String> m=new HashMap<String,String>();
+        JSONArray a=fetchTree(p,id); HashMap<String,String> m=new HashMap<String,String>();
         for(int i=0;i<a.length();i++){ JSONObject o=a.getJSONObject(i); if("blob".equals(o.optString("type"))) m.put(o.optString("path"),o.optString("sha")); } return m;
     }
 
@@ -153,7 +168,15 @@ public class GitSyncEngine {
         try{while(cur.moveToNext()){String id=cur.getString(0),name=cur.getString(1),mime=cur.getString(2); if(".git".equals(name)||".gitsync".equals(name))continue; Uri child=DocumentsContract.buildDocumentUriUsingTree(root,id); String rel=prefix.length()==0?name:prefix+"/"+name; if(DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) collectLocalFiles(c,root,child,rel,uris,shas); else {uris.put(rel,child); if(getFileSize(c,child)<50L*1024L*1024L) shas.put(rel,gitBlobSha(c,child));}}}finally{cur.close();}
     }
 
-    private static String gitBlobSha(Context c, Uri file) throws Exception { long size=getFileSize(c,file); MessageDigest md=MessageDigest.getInstance("SHA-1"); md.update(("blob "+size+"\0").getBytes("UTF-8")); InputStream in=c.getContentResolver().openInputStream(file); byte[] b=new byte[32768]; int n; while((n=in.read(b))>0)md.update(b,0,n); in.close(); byte[] d=md.digest(); StringBuilder x=new StringBuilder(); for(byte q:d)x.append(String.format("%02x",q&255)); return x.toString(); }
+    private static String gitBlobSha(Context c, Uri file) throws Exception {
+        long size = getFileSize(c, file); if (size < 0) throw new Exception("Cannot determine file size: " + file);
+        MessageDigest md = MessageDigest.getInstance("SHA-1"); md.update(("blob " + size + "\0").getBytes("UTF-8"));
+        InputStream in = c.getContentResolver().openInputStream(file); if (in == null) throw new Exception("Cannot read " + file);
+        long read = 0;
+        try { byte[] b = new byte[32768]; int n; while ((n = in.read(b)) >= 0) { if (n > 0) { md.update(b, 0, n); read += n; } } } finally { in.close(); }
+        if (read != size) throw new Exception("File changed while reading: " + file);
+        byte[] d = md.digest(); StringBuilder x = new StringBuilder(); for (byte q : d) x.append(String.format("%02x", q & 255)); return x.toString();
+    }
 
     private static class LfsPointer {
         String oid; long size;
@@ -162,9 +185,8 @@ public class GitSyncEngine {
 
     private static LfsPointer remoteLfsPointer(RepoProfile p, RepoId id, String blobSha) throws Exception {
         checkCancelled();
-        JSONObject blob = new JSONObject(request("GET", GitServerConfig.blobUrl(id.owner, id.repo, blobSha), p.token, null, null));
-        byte[] data = Base64.decode(blob.optString("content").replace("\n", "").replace("\r", ""), Base64.DEFAULT);
-        if (data.length < 40 || data.length > 4096) return null;
+        byte[] data = readBlobHead(p, id, blobSha, 4096);
+        if (data == null || data.length < 40) return null;
         String pointer = new String(data, "UTF-8");
         if (!pointer.startsWith("version " + GitServerConfig.LFS_SPEC_URL)) return null;
         String oid = null; long size = -1L;
@@ -180,10 +202,72 @@ public class GitSyncEngine {
 
     private static void downloadPath(Context c, RepoProfile p, RepoId id, Uri root, String path, String sha) throws Exception {
         if (callbackHolder.get() != null) callbackHolder.get().progress("Downloading: " + path);
-        JSONObject blob = new JSONObject(request("GET", GitServerConfig.blobUrl(id.owner, id.repo, sha), p.token, null, null));
-        byte[] data = Base64.decode(blob.optString("content").replace("\n", "").replace("\r", ""), Base64.DEFAULT);
-        Uri out = ensureFile(c, root, path);
-        if (!downloadLfsPointerIfNeeded(c, p, id, path, data, out)) writeBytes(c, out, path, data);
+        // Raw blob media type: bytes are streamed to the file, never held fully in memory.
+        HttpURLConnection conn = openRawBlob(p, id, sha);
+        InputStream in = null; byte[] small = null; Uri out = null;
+        try {
+            in = conn.getInputStream();
+            byte[] head = new byte[4097]; int len = readFully(in, head);
+            out = ensureFile(c, root, path);
+            if (len <= 4096) { small = new byte[len]; System.arraycopy(head, 0, small, 0, len); }
+            else {
+                OutputStream os = c.getContentResolver().openOutputStream(out, "wt");
+                if (os == null) throw new Exception("Cannot write " + path);
+                try {
+                    os.write(head, 0, len);
+                    byte[] b = new byte[64 * 1024]; int n;
+                    while ((n = in.read(b)) >= 0) { checkCancelled(); if (n > 0) os.write(b, 0, n); }
+                    os.flush();
+                } finally { try { os.close(); } catch (Exception ignored) { } }
+                return;
+            }
+        } finally {
+            try { if (in != null) in.close(); } catch (Exception ignored) { }
+            conn.disconnect();
+        }
+        // Small blob (<= 4 KiB): may be a Git LFS pointer.
+        if (!downloadLfsPointerIfNeeded(c, p, id, path, small, out)) writeBytes(c, out, path, small);
+    }
+
+    private static int readFully(InputStream in, byte[] buf) throws Exception {
+        int total = 0;
+        while (total < buf.length) { int n = in.read(buf, total, buf.length - total); if (n < 0) break; total += n; }
+        return total;
+    }
+
+    /** Returns the blob bytes if it is at most max bytes, otherwise null (without downloading the rest). */
+    private static byte[] readBlobHead(RepoProfile p, RepoId id, String sha, int max) throws Exception {
+        HttpURLConnection conn = openRawBlob(p, id, sha);
+        InputStream in = null;
+        try {
+            in = conn.getInputStream();
+            byte[] b = new byte[max + 1]; int len = readFully(in, b);
+            if (len > max) return null;
+            byte[] r = new byte[len]; System.arraycopy(b, 0, r, 0, len); return r;
+        } finally { try { if (in != null) in.close(); } catch (Exception ignored) { } conn.disconnect(); }
+    }
+
+    /** Opens GET /git/blobs/{sha} as raw bytes, with the same retry/rate-limit handling as request(). */
+    private static HttpURLConnection openRawBlob(RepoProfile p, RepoId id, String sha) throws Exception {
+        String url = GitServerConfig.blobUrl(id.owner, id.repo, sha);
+        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            HttpURLConnection c = null;
+            try {
+                checkCancelled();
+                if (callbackHolder.get() != null && attempt > 1) callbackHolder.get().progress("Retry " + attempt + "/" + MAX_RETRIES + "...");
+                c = (HttpURLConnection)new URL(url).openConnection(); c.setConnectTimeout(20000); c.setReadTimeout(60000); c.setRequestMethod("GET");
+                c.setRequestProperty("Accept", "application/vnd.github.raw+json"); c.setRequestProperty("X-GitHub-Api-Version", "2022-11-28"); c.setRequestProperty("User-Agent", "AIDE-GitSync");
+                if (p.token != null && p.token.trim().length() > 0) c.setRequestProperty("Authorization", "Bearer " + p.token.trim());
+                int code = c.getResponseCode();
+                if (code >= 200 && code < 300) return c;
+                String text = readText(c.getErrorStream());
+                HttpError he = httpError(code, text, c); c.disconnect(); c = null; throw he;
+            } catch (Exception e) {
+                if (c != null) c.disconnect();
+                backoffOrThrow(e, attempt);
+            }
+        }
+        throw new Exception("Network request failed after retries.");
     }
 
     private static void writeBytes(Context c, Uri out, String path, byte[] data) throws Exception {
@@ -231,8 +315,7 @@ public class GitSyncEngine {
     }
 
     private static int downloadRepository(Context c, RepoProfile p, RepoId id, Uri root) throws Exception {
-        String branch = safeBranch(p.branch); String treeUrl = GitServerConfig.treeUrl(id.owner, id.repo, branch);
-        JSONArray items = new JSONObject(request("GET", treeUrl, p.token, null, null)).getJSONArray("tree"); int count = 0; int i; if (callbackHolder.get() != null) callbackHolder.get().progress("" + GitServerConfig.SERVER_NAME + " tree loaded: " + items.length() + " entries");
+        JSONArray items = fetchTree(p, id); int count = 0; int i; if (callbackHolder.get() != null) callbackHolder.get().progress("" + GitServerConfig.SERVER_NAME + " tree loaded: " + items.length() + " entries");
         for (i = 0; i < items.length(); i++) { checkCancelled(); JSONObject item = items.getJSONObject(i); if (!"blob".equals(item.optString("type"))) continue; String path = item.optString("path"); if (path.length() == 0 || path.startsWith(".git/")) continue; downloadPath(c, p, id, root, path, item.optString("sha")); count++; }
         return count;
     }
@@ -243,7 +326,22 @@ public class GitSyncEngine {
     }
 
     private static void uploadFileWithRetry(Context c, RepoProfile p, RepoId id, Uri file, String rel) throws Exception {
-        Exception last=null; for(int a=1;a<=3;a++){ try{ uploadFile(c,p,id,file,rel); return; } catch(Exception e){ last=e; if(a<3 && callbackHolder.get()!=null) callbackHolder.get().progress("File failed: " + rel + " - retry " + (a+1) + "/3"); if(a<3) try{Thread.sleep(1000L*a);}catch(InterruptedException z){} } } throw last;
+        Exception last = null;
+        for (int a = 1; a <= 3; a++) {
+            try { uploadFile(c, p, id, file, rel); return; }
+            catch (SyncCancelled e) { throw e; }
+            catch (Exception e) {
+                last = e; if (a >= 3) break;
+                long wait = 1000L * a; String why = "File failed: " + rel;
+                if (e instanceof HttpError && ((HttpError)e).rateLimited) {
+                    HttpError he = (HttpError)e; if (he.waitMs > MAX_RATE_WAIT_MS) throw rateLimitTooLong(he);
+                    wait = he.waitMs; why = GitServerConfig.SERVER_NAME + " rate limit on " + rel;
+                }
+                if (callbackHolder.get() != null) callbackHolder.get().progress(why + " - retry " + (a + 1) + "/3 in " + ((wait + 999L) / 1000L) + "s");
+                sleepCancellable(wait);
+            }
+        }
+        throw last;
     }
 
     private static void uploadFile(Context c, RepoProfile p, RepoId id, Uri file, String rel) throws Exception {
@@ -258,20 +356,76 @@ public class GitSyncEngine {
             uploadLfsFile(c, p, id, file, rel, size, api, sha);
             return;
         }
+        String message = "Sync " + rel + " from Android";
+        // Bigger files are streamed as Base64 straight into the request (constant memory).
+        if (size >= STREAM_UPLOAD_MIN) { putFileStreamed(c, p, api, file, rel, size, message, sha); return; }
         InputStream in = c.getContentResolver().openInputStream(file); if (in == null) throw new Exception("Cannot read " + rel);
         ByteArrayOutputStream out = new ByteArrayOutputStream(); byte[] buf = new byte[8192]; int n;
-        while ((n = in.read(buf)) >= 0) out.write(buf, 0, n); in.close();
-        JSONObject body = new JSONObject(); body.put("message", "Sync " + rel + " from Android");
+        try { while ((n = in.read(buf)) >= 0) out.write(buf, 0, n); } finally { in.close(); }
+        JSONObject body = new JSONObject(); body.put("message", message);
         body.put("content", Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)); body.put("branch", safeBranch(p.branch));
         if (sha != null && sha.length() > 0) body.put("sha", sha);
         request("PUT", api, p.token, "application/json; charset=UTF-8", body.toString());
     }
 
+    /** PUT /contents/{path} with the JSON body written incrementally; Base64 is produced on the fly. */
+    private static void putFileStreamed(Context c, RepoProfile p, String api, Uri file, String rel, long size, String message, String sha) throws Exception {
+        String head = "{\"message\":" + JSONObject.quote(message) + ",\"branch\":" + JSONObject.quote(safeBranch(p.branch))
+            + (sha != null && sha.length() > 0 ? ",\"sha\":" + JSONObject.quote(sha) : "") + ",\"content\":\"";
+        String tail = "\"}";
+        byte[] hb = head.getBytes("UTF-8"); byte[] tb = tail.getBytes("UTF-8");
+        long b64Len = ((size + 2L) / 3L) * 4L; // Base64 NO_WRAP length
+        InputStream in = c.getContentResolver().openInputStream(file); if (in == null) throw new Exception("Cannot read " + rel);
+        HttpURLConnection conn = null;
+        try {
+            checkCancelled();
+            conn = (HttpURLConnection)new URL(api).openConnection(); conn.setConnectTimeout(20000); conn.setReadTimeout(120000); conn.setRequestMethod("PUT");
+            conn.setRequestProperty("Accept", "application/vnd.github+json"); conn.setRequestProperty("X-GitHub-Api-Version", "2022-11-28"); conn.setRequestProperty("User-Agent", "AIDE-GitSync");
+            if (p.token != null && p.token.trim().length() > 0) conn.setRequestProperty("Authorization", "Bearer " + p.token.trim());
+            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            conn.setDoOutput(true); conn.setFixedLengthStreamingMode(hb.length + b64Len + tb.length);
+            OutputStream os = conn.getOutputStream();
+            os.write(hb);
+            Base64OutputStream b64 = new Base64OutputStream(os, Base64.NO_WRAP | Base64.NO_CLOSE);
+            byte[] buf = new byte[48 * 1024]; int n; long sent = 0; int last = -1;
+            while ((n = in.read(buf)) >= 0) {
+                checkCancelled(); if (n == 0) continue;
+                if (sent + n > size) throw new Exception("File changed while uploading: " + rel);
+                b64.write(buf, 0, n); sent += n;
+                int pct = (int)(sent * 100L / size);
+                if (pct >= last + 20) { last = pct; Callback cb = callbackHolder.get(); if (cb != null) cb.progress("Uploading " + rel + ": " + pct + "%"); }
+            }
+            b64.close(); // writes the final Base64 padding; does not close the connection stream (NO_CLOSE)
+            if (sent != size) throw new Exception("File changed while uploading: " + rel);
+            os.write(tb); os.close();
+            int code = conn.getResponseCode();
+            String text = readText(code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream());
+            if (code < 200 || code >= 300) throw httpError(code, text, conn);
+        } finally {
+            try { in.close(); } catch (Exception ignored) { }
+            if (conn != null) conn.disconnect();
+        }
+    }
+
     private static long getFileSize(Context c, Uri file) {
+        // 1) file descriptor length (returns -1 when the provider does not know it)
         AssetFileDescriptor afd = null;
-        try { afd = c.getContentResolver().openAssetFileDescriptor(file, "r"); if (afd != null) return afd.getLength(); }
+        try { afd = c.getContentResolver().openAssetFileDescriptor(file, "r"); if (afd != null && afd.getLength() >= 0) return afd.getLength(); }
         catch (Exception ignored) { } finally { try { if (afd != null) afd.close(); } catch (Exception ignored) { } }
-        return -1L;
+        // 2) SAF COLUMN_SIZE
+        Cursor cur = null;
+        try {
+            cur = c.getContentResolver().query(file, new String[] { DocumentsContract.Document.COLUMN_SIZE }, null, null, null);
+            if (cur != null && cur.moveToFirst() && !cur.isNull(0)) { long v = cur.getLong(0); if (v >= 0) return v; }
+        } catch (Exception ignored) { } finally { if (cur != null) cur.close(); }
+        // 3) last resort: count the bytes by streaming
+        InputStream in = null;
+        try {
+            in = c.getContentResolver().openInputStream(file); if (in == null) return -1L;
+            byte[] b = new byte[64 * 1024]; long total = 0; int n;
+            while ((n = in.read(b)) >= 0) total += n;
+            return total;
+        } catch (Exception ignored) { return -1L; } finally { try { if (in != null) in.close(); } catch (Exception ignored) { } }
     }
 
     private static String sha256(Context c, Uri file, String rel) throws Exception {
@@ -348,9 +502,7 @@ public class GitSyncEngine {
         collectLocalPaths(c, root, root, "", local);
         if (callbackHolder.get() != null) callbackHolder.get().progress("Local scan complete: " + local.size() + " file(s)");
         int uploaded = uploadFolder(c, p, id, root, root, "");
-        String branch = safeBranch(p.branch);
-        String treeUrl = GitServerConfig.treeUrl(id.owner, id.repo, branch);
-        JSONArray items = new JSONObject(request("GET", treeUrl, p.token, null, null)).getJSONArray("tree");
+        JSONArray items = fetchTree(p, id);
         int deleted = 0; int i;
         for (i = 0; i < items.length(); i++) { checkCancelled();
             JSONObject item = items.getJSONObject(i);
@@ -365,9 +517,7 @@ public class GitSyncEngine {
     }
 
     private static int[] mirrorRemoteFolder(Context c, RepoProfile p, RepoId id, Uri root) throws Exception {
-        String branch = safeBranch(p.branch);
-        String treeUrl = GitServerConfig.treeUrl(id.owner, id.repo, branch);
-        JSONArray items = new JSONObject(request("GET", treeUrl, p.token, null, null)).getJSONArray("tree");
+        JSONArray items = fetchTree(p, id);
         HashSet<String> remote = new HashSet<String>();
         int downloaded = 0; int i;
         if (callbackHolder.get() != null) callbackHolder.get().progress("" + GitServerConfig.SERVER_NAME + " tree loaded: " + items.length() + " entries");
@@ -428,30 +578,97 @@ public class GitSyncEngine {
                 checkCancelled();
                 if (callbackHolder.get() != null && attempt > 1) callbackHolder.get().progress("Retry " + attempt + "/" + MAX_RETRIES + "...");
                 return requestOnce(method, urlText, token, contentType, body);
-            } catch (HttpError e) {
-                if (!isRetryableHttp(e.code) || attempt >= MAX_RETRIES) throw e;
-                retryWait(attempt, GitServerConfig.SERVER_NAME + " HTTP " + e.code);
-            } catch (UnknownHostException e) {
-                if (attempt >= MAX_RETRIES) throw new Exception("Cannot resolve " + GitServerConfig.API_BASE_URL + " after " + MAX_RETRIES + " attempts. Check Wi-Fi/mobile data, Private DNS/VPN.");
-                retryWait(attempt, "DNS lookup failed");
-            } catch (SocketTimeoutException e) {
-                if (attempt >= MAX_RETRIES) throw new Exception("Network timeout after " + MAX_RETRIES + " attempts.");
-                retryWait(attempt, "Network timeout");
-            } catch (IOException e) {
-                if (attempt >= MAX_RETRIES) throw e;
-                retryWait(attempt, "Network connection error");
+            } catch (Exception e) {
+                backoffOrThrow(e, attempt);
             }
         }
         throw new Exception("Network request failed after retries.");
     }
+
+    /** Returns normally when the caller should retry (after waiting); throws when it should give up. */
+    private static void backoffOrThrow(Exception ex, int attempt) throws Exception {
+        if (ex instanceof SyncCancelled) throw ex;
+        if (ex instanceof HttpError) {
+            HttpError e = (HttpError)ex;
+            if (e.rateLimited) {
+                if (e.waitMs > MAX_RATE_WAIT_MS) throw rateLimitTooLong(e);
+                if (attempt >= MAX_RETRIES) throw e;
+                retryWaitMs(attempt, GitServerConfig.SERVER_NAME + " rate limit", e.waitMs);
+                return;
+            }
+            if (!isRetryableHttp(e.code) || attempt >= MAX_RETRIES) throw e;
+            retryWait(attempt, GitServerConfig.SERVER_NAME + " HTTP " + e.code);
+        } else if (ex instanceof UnknownHostException) {
+            if (attempt >= MAX_RETRIES) throw new Exception("Cannot resolve " + GitServerConfig.API_BASE_URL + " after " + MAX_RETRIES + " attempts. Check Wi-Fi/mobile data, Private DNS/VPN.");
+            retryWait(attempt, "DNS lookup failed");
+        } else if (ex instanceof SocketTimeoutException) {
+            if (attempt >= MAX_RETRIES) throw new Exception("Network timeout after " + MAX_RETRIES + " attempts.");
+            retryWait(attempt, "Network timeout");
+        } else if (ex instanceof IOException) {
+            if (attempt >= MAX_RETRIES) throw ex;
+            retryWait(attempt, "Network connection error");
+        } else throw ex;
+    }
     private static boolean isRetryableHttp(int code) { return code == 408 || code == 429 || code == 500 || code == 502 || code == 503 || code == 504; }
-    private static void retryWait(int attempt, String reason) throws Exception { checkCancelled(); long wait = 1000L << (attempt - 1); if (wait > 12000L) wait = 12000L; if (callbackHolder.get() != null) callbackHolder.get().progress(reason + " - retry " + (attempt + 1) + "/" + MAX_RETRIES + " in " + (wait / 1000L) + "s"); try { Thread.sleep(wait); } catch (InterruptedException ignored) { } }
-    private static String requestOnce(String method, String urlText, String token, String contentType, String body) throws Exception { HttpURLConnection c = (HttpURLConnection)new URL(urlText).openConnection(); c.setConnectTimeout(20000); c.setReadTimeout(60000); c.setRequestMethod(method); c.setRequestProperty("Accept", "application/vnd.github+json"); c.setRequestProperty("X-GitHub-Api-Version", "2022-11-28"); c.setRequestProperty("User-Agent", "AIDE-GitSync"); if (token != null && token.trim().length() > 0) c.setRequestProperty("Authorization", "Bearer " + token.trim()); if (body != null) { c.setDoOutput(true); c.setRequestProperty("Content-Type", contentType == null ? "application/json; charset=UTF-8" : contentType); byte[] data = body.getBytes("UTF-8"); c.setFixedLengthStreamingMode(data.length); OutputStream os = c.getOutputStream(); os.write(data); os.close(); } int code = c.getResponseCode(); InputStream in = code >= 200 && code < 300 ? c.getInputStream() : c.getErrorStream(); String text = readText(in); c.disconnect(); if (code < 200 || code >= 300) { String message = text; try { message = new JSONObject(text).optString("message", text); } catch (Exception ignored) { } throw new HttpError(code, GitServerConfig.SERVER_NAME + " HTTP " + code + ": " + message); } return text; }
+    private static void retryWait(int attempt, String reason) throws Exception { long wait = 1000L << (attempt - 1); if (wait > 12000L) wait = 12000L; retryWaitMs(attempt, reason, wait); }
+    private static void retryWaitMs(int attempt, String reason, long wait) throws Exception {
+        checkCancelled();
+        if (callbackHolder.get() != null) callbackHolder.get().progress(reason + " - retry " + (attempt + 1) + "/" + MAX_RETRIES + " in " + ((wait + 999L) / 1000L) + "s");
+        sleepCancellable(wait);
+    }
+    /** Sleeps in short slices so the STOP button takes effect during long rate-limit waits. */
+    private static void sleepCancellable(long ms) throws Exception {
+        long end = System.currentTimeMillis() + ms;
+        while (true) {
+            checkCancelled();
+            long left = end - System.currentTimeMillis(); if (left <= 0L) return;
+            try { Thread.sleep(left > 500L ? 500L : left); } catch (InterruptedException ignored) { }
+        }
+    }
+    private static Exception rateLimitTooLong(HttpError e) {
+        return new Exception(GitServerConfig.SERVER_NAME + " rate limit reached. Try again in about " + ((e.waitMs + 59999L) / 60000L) + " min.");
+    }
+
+    /**
+     * Builds an HttpError and classifies rate limiting. GitHub signals primary and secondary limits with
+     * 403 or 429, Retry-After, or X-RateLimit-Remaining: 0. Must be called before the connection is closed.
+     */
+    private static HttpError httpError(int code, String text, HttpURLConnection c) {
+        String message = text; try { message = new JSONObject(text).optString("message", text); } catch (Exception ignored) { }
+        HttpError e = new HttpError(code, GitServerConfig.SERVER_NAME + " HTTP " + code + ": " + message);
+        String retryAfter = c.getHeaderField("Retry-After"), remaining = c.getHeaderField("X-RateLimit-Remaining"), reset = c.getHeaderField("X-RateLimit-Reset");
+        String lower = message == null ? "" : message.toLowerCase(java.util.Locale.US);
+        boolean limitText = lower.indexOf("rate limit") >= 0 || lower.indexOf("abuse") >= 0 || lower.indexOf("secondary") >= 0;
+        boolean exhausted = remaining != null && "0".equals(remaining.trim());
+        e.rateLimited = code == 429 || (code == 403 && (limitText || exhausted || retryAfter != null));
+        if (e.rateLimited) {
+            long wait = -1L;
+            try { if (retryAfter != null) wait = Long.parseLong(retryAfter.trim()) * 1000L; } catch (Exception ignored) { }
+            if (wait < 0L && exhausted && reset != null) { try { wait = Long.parseLong(reset.trim()) * 1000L - System.currentTimeMillis() + 1000L; } catch (Exception ignored) { } }
+            if (wait < 0L) wait = 60000L; // GitHub asks for at least a minute on secondary limits
+            if (wait < 1000L) wait = 1000L;
+            e.waitMs = wait;
+        }
+        return e;
+    }
+
+    private static String requestOnce(String method, String urlText, String token, String contentType, String body) throws Exception {
+        HttpURLConnection c = (HttpURLConnection)new URL(urlText).openConnection(); c.setConnectTimeout(20000); c.setReadTimeout(60000); c.setRequestMethod(method);
+        c.setRequestProperty("Accept", "application/vnd.github+json"); c.setRequestProperty("X-GitHub-Api-Version", "2022-11-28"); c.setRequestProperty("User-Agent", "AIDE-GitSync");
+        if (token != null && token.trim().length() > 0) c.setRequestProperty("Authorization", "Bearer " + token.trim());
+        if (body != null) { c.setDoOutput(true); c.setRequestProperty("Content-Type", contentType == null ? "application/json; charset=UTF-8" : contentType); byte[] data = body.getBytes("UTF-8"); c.setFixedLengthStreamingMode(data.length); OutputStream os = c.getOutputStream(); os.write(data); os.close(); }
+        int code = c.getResponseCode(); InputStream in = code >= 200 && code < 300 ? c.getInputStream() : c.getErrorStream(); String text = readText(in);
+        HttpError error = code < 200 || code >= 300 ? httpError(code, text, c) : null;
+        c.disconnect();
+        if (error != null) throw error;
+        return text;
+    }
     private static String readText(InputStream in) throws Exception { if (in == null) return ""; BufferedReader br = new BufferedReader(new InputStreamReader(in, "UTF-8")); StringBuilder sb = new StringBuilder(); String line; while ((line = br.readLine()) != null) sb.append(line).append('\n'); br.close(); return sb.toString(); }
     private static String enc(String s) throws Exception { return URLEncoder.encode(s, "UTF-8").replace("+", "%20"); }
     private static String encodePath(String path) throws Exception { String[] parts = path.split("/"); StringBuilder b = new StringBuilder(); int i; for (i = 0; i < parts.length; i++) { if (i > 0) b.append('/'); b.append(enc(parts[i])); } return b.toString(); }
     private static String safeBranch(String b) { return b == null || b.trim().length() == 0 ? "main" : b.trim(); }
     private static RepoId parseRepo(String u) { String[] a = GitServerConfig.parseRepositoryUrl(u); return a == null ? null : new RepoId(a[0], a[1]); }
     private static class RepoId { String owner; String repo; RepoId(String owner, String repo) { this.owner = owner; this.repo = repo; } }
-    private static class HttpError extends Exception { int code; HttpError(int code, String message) { super(message); this.code = code; } }
+    private static class HttpError extends Exception { int code; boolean rateLimited; long waitMs = -1L; HttpError(int code, String message) { super(message); this.code = code; } }
+    private static class SyncCancelled extends Exception { SyncCancelled() { super("Sync stopped by user"); } }
 }
