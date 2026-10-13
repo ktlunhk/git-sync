@@ -1,3 +1,5 @@
-<h2>Git Sync</h2>
-It is an Android AIDE project for git sync<br/><br/>
-<a href="https://github.com/ktlunhk/git-sync/raw/main/release/gitsync.apk">Release 1.0</a>
+
+## Reliability update
+- Git LFS downloads now verify SHA-256 against the LFS OID as well as file size.
+- Folder selection no longer reports success if persistable SAF permission cannot be retained.
+- Foreground sync notifications now include STOP and show determinate progress when a percentage is available.
