@@ -292,7 +292,13 @@ public class MainActivity extends Activity {
         if (requestCode != REQUEST_FOLDER || resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
         int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-        try { getContentResolver().takePersistableUriPermission(uri, flags); } catch (Exception e) { }
+        try {
+            getContentResolver().takePersistableUriPermission(uri, flags);
+        } catch (Exception e) {
+            pendingFolderTarget = null;
+            Toast.makeText(this, "Cannot keep folder access. Please select the folder again and allow read/write access.", Toast.LENGTH_LONG).show();
+            return;
+        }
         if (pendingFolderTarget != null) pendingFolderTarget.setText(uri.toString());
         pendingFolderTarget = null;
         Toast.makeText(this, "Folder access granted", Toast.LENGTH_SHORT).show();
