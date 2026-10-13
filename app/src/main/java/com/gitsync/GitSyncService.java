@@ -29,6 +29,7 @@ public class GitSyncService extends Service {
     private static volatile String activeRepositoryKey = null;
 
     private static final String X_ID="id", X_MODE="mode", X_NAME="name", X_URL="url", X_BRANCH="branch", X_LOCAL="local", X_USER="user";
+    private static final String ACTION_STOP="com.gitsync.STOP_SYNC";
     public static final int DOWNLOAD=0, UPLOAD=1, SYNC=2, MIRROR_LOCAL_TO_REMOTE=3, MIRROR_REMOTE_TO_LOCAL=4, PREVIEW=5;
 
     public static void download(Context c, RepoProfile p, GitSyncEngine.Callback cb) { start(c,p,DOWNLOAD,cb,null); }
@@ -76,6 +77,7 @@ public class GitSyncService extends Service {
 
     public int onStartCommand(Intent i, int flags, final int startId) {
         if(i==null) return START_NOT_STICKY;
+        if (ACTION_STOP.equals(i.getAction())) { GitSyncEngine.cancel(); updateNotification(null, "Stopping..."); return START_NOT_STICKY; }
         final int id=i.getIntExtra(X_ID,0), mode=i.getIntExtra(X_MODE,-1);
         final RepoProfile p=new RepoProfile(n(i,X_NAME),n(i,X_URL),n(i,X_BRANCH),n(i,X_LOCAL),n(i,X_USER),GitHubAuth.token(getApplicationContext()));
         active.incrementAndGet();
@@ -126,7 +128,21 @@ public class GitSyncService extends Service {
     private static String n(Intent i,String k){ String s=i.getStringExtra(k); return s==null?"":s; }
     private void createChannel(){ if(Build.VERSION.SDK_INT>=26){ NotificationChannel c=new NotificationChannel(CHANNEL_ID,"Sync operations",NotificationManager.IMPORTANCE_LOW); c.setDescription("Shows active myGitSync transfers"); ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).createNotificationChannel(c); } }
     private Notification notification(String text){ return notification(text,true); }
-    private Notification notification(String text,boolean ongoing){ Intent open=new Intent(this,MainActivity.class); open.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_CLEAR_TOP); int pf=PendingIntent.FLAG_UPDATE_CURRENT; if(Build.VERSION.SDK_INT>=23) pf|=PendingIntent.FLAG_IMMUTABLE; PendingIntent pi=PendingIntent.getActivity(this,0,open,pf); Notification.Builder b=Build.VERSION.SDK_INT>=26?new Notification.Builder(this,CHANNEL_ID):new Notification.Builder(this); return b.setSmallIcon(R.drawable.ic_gitsync).setContentTitle("myGitSync").setContentText(shortText(text)).setContentIntent(pi).setOngoing(ongoing).setAutoCancel(!ongoing).build(); }
+    private Notification notification(String text,boolean ongoing){
+        Intent open=new Intent(this,MainActivity.class); open.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        int pf=PendingIntent.FLAG_UPDATE_CURRENT; if(Build.VERSION.SDK_INT>=23) pf|=PendingIntent.FLAG_IMMUTABLE;
+        PendingIntent pi=PendingIntent.getActivity(this,0,open,pf);
+        Notification.Builder b=Build.VERSION.SDK_INT>=26?new Notification.Builder(this,CHANNEL_ID):new Notification.Builder(this);
+        b.setSmallIcon(R.drawable.ic_gitsync).setContentTitle("myGitSync").setContentText(shortText(text)).setContentIntent(pi).setOngoing(ongoing).setAutoCancel(!ongoing);
+        if (ongoing) {
+            Intent stop=new Intent(this,GitSyncService.class); stop.setAction(ACTION_STOP);
+            PendingIntent spi=PendingIntent.getService(this,1,stop,pf);
+            b.addAction(R.drawable.ic_action_stop,"STOP",spi);
+            int pct=percentFrom(text); if(pct>=0) b.setProgress(100,pct,false); else b.setProgress(0,0,true);
+        }
+        return b.build();
+    }
+    private int percentFrom(String s){ if(s==null)return -1; int x=s.lastIndexOf('%'); if(x<1)return -1; int a=x-1; while(a>=0 && Character.isDigit(s.charAt(a)))a--; try{ int v=Integer.parseInt(s.substring(a+1,x)); return v>=0&&v<=100?v:-1; }catch(Exception e){ return -1; } }
     private void updateNotification(String repo,String m){ ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(NOTIFICATION_ID,notification((repo==null?"":repo+": ")+m)); }
     private String shortText(String s){ if(s==null)return "Syncing..."; return s.length()>120?s.substring(0,117)+"...":s; }
 }
