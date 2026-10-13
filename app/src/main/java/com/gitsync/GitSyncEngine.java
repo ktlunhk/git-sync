@@ -299,20 +299,24 @@ public class GitSyncEngine {
         JSONObject actions = result.optJSONObject("actions");
         if (actions == null || !actions.has("download")) throw new Exception("Git LFS download action missing for " + path);
         JSONObject action = actions.getJSONObject("download");
-        streamLfsDownload(c, out, path, size, action.getString("href"), action.optJSONObject("header"));
+        streamLfsDownload(c, out, path, size, oid, action.getString("href"), action.optJSONObject("header"));
         return true;
     }
 
-    private static void streamLfsDownload(Context c, Uri outUri, String path, long size, String href, JSONObject headers) throws Exception {
+    private static void streamLfsDownload(Context c, Uri outUri, String path, long size, String expectedOid, String href, JSONObject headers) throws Exception {
         HttpURLConnection conn = (HttpURLConnection)new URL(href).openConnection(); conn.setConnectTimeout(20000); conn.setReadTimeout(300000); conn.setRequestMethod("GET");
         if (headers != null) { java.util.Iterator<String> it = headers.keys(); while (it.hasNext()) { String k = it.next(); conn.setRequestProperty(k, headers.optString(k)); } }
         int code = conn.getResponseCode(); if (code < 200 || code >= 300) { String text = readText(conn.getErrorStream()); conn.disconnect(); throw new Exception("Git LFS download HTTP " + code + ": " + text); }
         InputStream in = conn.getInputStream(); OutputStream out = c.getContentResolver().openOutputStream(outUri, "wt"); if (out == null) { try { in.close(); } catch (Exception ignored) { } conn.disconnect(); throw new Exception("Cannot write " + path); }
-        byte[] b = new byte[64 * 1024]; int n; long got = 0; int last = -1;
-        try { while ((n = in.read(b)) >= 0) { checkCancelled(); if (n == 0) continue; out.write(b, 0, n); got += n; if (size > 0) { int pct = (int)(got * 100L / size); if (pct >= last + 10) { last = pct; Callback cb = callbackHolder.get(); if (cb != null) cb.progress("Downloading " + path + ": " + pct + "%"); } } } out.flush(); }
+        byte[] b = new byte[64 * 1024]; int n; long got = 0; int last = -1; MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        try { while ((n = in.read(b)) >= 0) { checkCancelled(); if (n == 0) continue; out.write(b, 0, n); digest.update(b, 0, n); got += n; if (size > 0) { int pct = (int)(got * 100L / size); if (pct >= last + 10) { last = pct; Callback cb = callbackHolder.get(); if (cb != null) cb.progress("Downloading " + path + ": " + pct + "%"); } } } out.flush(); }
         finally { try { in.close(); } catch (Exception ignored) { } try { out.close(); } catch (Exception ignored) { } conn.disconnect(); }
         if (size >= 0 && got != size) throw new Exception("Git LFS download size mismatch for " + path + ": expected " + size + ", received " + got);
+        String actualOid = hex(digest.digest());
+        if (expectedOid != null && !expectedOid.equalsIgnoreCase(actualOid)) throw new Exception("Git LFS SHA-256 mismatch for " + path + ". Download rejected to protect local data.");
     }
+
+    private static String hex(byte[] data) { StringBuilder b = new StringBuilder(data.length * 2); for (int i=0;i<data.length;i++) { int v=data[i]&255; if(v<16)b.append('0'); b.append(Integer.toHexString(v)); } return b.toString(); }
 
     private static int downloadRepository(Context c, RepoProfile p, RepoId id, Uri root) throws Exception {
         JSONArray items = fetchTree(p, id); int count = 0; int i; if (callbackHolder.get() != null) callbackHolder.get().progress("" + GitServerConfig.SERVER_NAME + " tree loaded: " + items.length() + " entries");
